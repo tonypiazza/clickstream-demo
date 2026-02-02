@@ -1,0 +1,115 @@
+"""
+Quix Streams Application factory with Kafka configuration.
+
+Supports both local Docker (PLAINTEXT) and Aiven (SSL) deployments.
+"""
+
+import logging
+
+from quixstreams import Application
+from quixstreams.kafka.configuration import ConnectionConfig
+
+from clickstream.utils.config import get_settings
+
+logger = logging.getLogger(__name__)
+
+
+def ensure_topic_exists(topic_name: str, num_partitions: int, replication_factor: int = 1) -> None:
+    """
+    Ensure a Kafka topic exists, creating it if necessary.
+
+    Args:
+        topic_name: Name of the topic to ensure exists
+        num_partitions: Number of partitions for the topic (if creating)
+        replication_factor: Replication factor for the topic (if creating)
+    """
+    from kafka import KafkaAdminClient
+    from kafka.admin import NewTopic
+    from kafka.errors import TopicAlreadyExistsError
+
+    from clickstream.utils.kafka import build_kafka_config
+
+    settings = get_settings()
+    config = build_kafka_config(settings.kafka)
+    admin = KafkaAdminClient(**config)
+
+    try:
+        topics = admin.list_topics()
+        if topic_name not in topics:
+            logger.info("Creating topic '%s' with %d partitions", topic_name, num_partitions)
+            new_topic = NewTopic(
+                name=topic_name,
+                num_partitions=num_partitions,
+                replication_factor=replication_factor,
+            )
+            try:
+                admin.create_topics([new_topic])
+                logger.info("Topic '%s' created successfully", topic_name)
+            except TopicAlreadyExistsError:
+                # Race condition - another process created it
+                logger.debug("Topic '%s' already exists (created by another process)", topic_name)
+        else:
+            logger.debug("Topic '%s' already exists", topic_name)
+    finally:
+        admin.close()
+
+
+def create_application(
+    consumer_group: str,
+    auto_offset_reset: str = "earliest",
+) -> Application:
+    """
+    Create a Quix Streams Application with proper Kafka configuration.
+
+    Args:
+        consumer_group: Kafka consumer group ID
+        auto_offset_reset: Where to start reading if no committed offset
+
+    Returns:
+        Configured Quix Application instance
+    """
+    settings = get_settings()
+
+    # Check if SSL is configured (Aiven uses mTLS)
+    if settings.kafka.security_protocol == "SSL" and settings.kafka.ssl_ca_file:
+        # Aiven: SSL with client certificates (mTLS)
+        connection = ConnectionConfig(
+            bootstrap_servers=settings.kafka.bootstrap_servers,
+            security_protocol="SSL",
+            ssl_ca_location=settings.kafka.ssl_ca_file,
+            ssl_certificate_location=settings.kafka.ssl_cert_file,
+            ssl_key_location=settings.kafka.ssl_key_file,
+        )
+    else:
+        # Local Docker: PLAINTEXT (no auth)
+        connection = ConnectionConfig(
+            bootstrap_servers=settings.kafka.bootstrap_servers,
+        )
+
+    return Application(
+        broker_address=connection,
+        consumer_group=consumer_group,
+        auto_offset_reset=auto_offset_reset,
+        # Disable changelog topics - using Valkey for state
+        use_changelog_topics=False,
+        # Don't auto-create topics (we manage via CLI)
+        auto_create_topics=False,
+    )
+
+
+def create_topic(app: Application, topic_name: str):
+    """
+    Create a topic configuration for the application.
+
+    Args:
+        app: Quix Application instance
+        topic_name: Name of the Kafka topic
+
+    Returns:
+        Topic instance for use with app.dataframe()
+    """
+    return app.topic(
+        name=topic_name,
+        value_deserializer="json",
+        key_deserializer="bytes",
+    )
