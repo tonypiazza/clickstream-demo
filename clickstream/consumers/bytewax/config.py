@@ -60,6 +60,10 @@ def get_kafka_add_config(
     if group_id:
         config["group.id"] = group_id
         config["enable.auto.commit"] = str(auto_commit).lower()
+        if auto_commit:
+            # Reduce auto-commit interval from 5s default to 1s for more accurate
+            # lag tracking in benchmarks and monitoring tools
+            config["auto.commit.interval.ms"] = "1000"
 
     # SSL configuration for Aiven
     if settings.kafka.security_protocol == "SSL":
