@@ -99,12 +99,11 @@ def main():
     else:
         os.environ["CLICKSTREAM_CONSUMER_GROUP"] = settings.opensearch.consumer_group_id
 
-    # Get framework and consumer
-    from clickstream.framework import get_framework
+    # Get consumer
+    from clickstream.consumers import get_consumer
     from clickstream.utils.versions import get_clickstream_version
 
-    framework = get_framework()
-    consumer = framework.get_consumer(args.type)
+    consumer = get_consumer(args.type)
 
     consumer_name = "PostgreSQL" if args.type == "postgresql" else "OpenSearch"
     logger.info(

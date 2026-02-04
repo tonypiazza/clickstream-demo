@@ -32,12 +32,12 @@ from clickstream.cli.shared import (
     _box_header,
     _box_line,
     _empty_line,
-    _get_all_consumer_pids,
-    _get_consumer_log_file,
-    _get_consumer_pid_file,
-    _get_kafka_config,
-    _get_opensearch_instance,
-    _is_opensearch_consumer_running,
+    get_all_consumer_pids,
+    get_consumer_log_file,
+    get_consumer_pid_file,
+    get_kafka_config,
+    get_opensearch_instance,
+    is_opensearch_consumer_running,
     get_process_end_time,
     get_process_pid,
     get_process_start_time,
@@ -89,7 +89,7 @@ def _collect_consumer_data(settings: Any) -> dict[str, Any]:
     result: dict[str, Any] = {"postgresql": {}, "opensearch": {}}
 
     # ── PostgreSQL Consumers ──────────────────────────────
-    running_consumers = _get_all_consumer_pids()
+    running_consumers = get_all_consumer_pids()
     num_running = len(running_consumers)
     pg_consumer_start_time = None
     pg_consumer_lag = None
@@ -118,7 +118,7 @@ def _collect_consumer_data(settings: Any) -> dict[str, Any]:
     else:
         # Consumer is stopped - check for last run time from log files
         for i in range(4):
-            log_file = _get_consumer_log_file(i, "postgresql")
+            log_file = get_consumer_log_file(i, "postgresql")
             if log_file.exists():
                 pg_consumer_last_run = get_process_end_time(log_file)
                 if pg_consumer_last_run:
@@ -146,7 +146,7 @@ def _collect_consumer_data(settings: Any) -> dict[str, Any]:
 
     # ── OpenSearch Consumer ──────────────────────────────
     os_enabled = settings.opensearch.enabled
-    os_consumer_running = _is_opensearch_consumer_running() if os_enabled else False
+    os_consumer_running = is_opensearch_consumer_running() if os_enabled else False
     os_consumer_pid = None
     os_consumer_start_time = None
     os_consumer_lag = None
@@ -154,9 +154,9 @@ def _collect_consumer_data(settings: Any) -> dict[str, Any]:
     os_consumer_last_message = None
 
     if os_enabled:
-        instance = _get_opensearch_instance()
-        os_pid_file = _get_consumer_pid_file(instance, "opensearch")
-        os_log_file = _get_consumer_log_file(instance, "opensearch")
+        instance = get_opensearch_instance()
+        os_pid_file = get_consumer_pid_file(instance, "opensearch")
+        os_log_file = get_consumer_log_file(instance, "opensearch")
         os_group_id = settings.opensearch.consumer_group_id
 
         if os_consumer_running:
@@ -267,11 +267,13 @@ def _kafka_connection_with_retry(timeout_ms: int) -> list[dict[str, Any]]:
     """Make Kafka connection with retry logic."""
     from kafka import KafkaAdminClient, KafkaConsumer, TopicPartition
 
-    kafka_config = _get_kafka_config(timeout_ms=timeout_ms)
+    kafka_config = get_kafka_config(timeout_ms=timeout_ms)
     kafka_topics: list[dict[str, Any]] = []
 
     admin = KafkaAdminClient(**kafka_config)
-    topic_names = [t for t in admin.list_topics() if not t.startswith("__")]
+    topic_names = [
+        t for t in admin.list_topics() if not t.startswith("__") and "__assignor" not in t
+    ]
     admin.close()
 
     if topic_names:
@@ -708,7 +710,7 @@ def _collect_status_data() -> dict[str, Any]:
     }
 
     # ── PostgreSQL Consumers ──────────────────────────────
-    running_consumers = _get_all_consumer_pids()
+    running_consumers = get_all_consumer_pids()
     num_running = len(running_consumers)
     pg_consumer_start_time = None
     pg_consumer_lag = None
@@ -737,7 +739,7 @@ def _collect_status_data() -> dict[str, Any]:
     else:
         # Check for last run time
         for i in range(4):
-            log_file = _get_consumer_log_file(i, "postgresql")
+            log_file = get_consumer_log_file(i, "postgresql")
             if log_file.exists():
                 pg_consumer_last_run = get_process_end_time(log_file)
                 if pg_consumer_last_run:
@@ -755,7 +757,7 @@ def _collect_status_data() -> dict[str, Any]:
 
     # ── OpenSearch Consumer ──────────────────────────────
     os_enabled = settings.opensearch.enabled
-    os_consumer_running = _is_opensearch_consumer_running() if os_enabled else False
+    os_consumer_running = is_opensearch_consumer_running() if os_enabled else False
     os_consumer_pid = None
     os_consumer_start_time = None
     os_consumer_lag = None
@@ -763,9 +765,9 @@ def _collect_status_data() -> dict[str, Any]:
     os_consumer_last_message = None
 
     if os_enabled:
-        instance = _get_opensearch_instance()
-        os_pid_file = _get_consumer_pid_file(instance, "opensearch")
-        os_log_file = _get_consumer_log_file(instance, "opensearch")
+        instance = get_opensearch_instance()
+        os_pid_file = get_consumer_pid_file(instance, "opensearch")
+        os_log_file = get_consumer_log_file(instance, "opensearch")
 
         if os_consumer_running:
             os_consumer_pid = get_process_pid(os_pid_file)
@@ -807,10 +809,12 @@ def _collect_status_data() -> dict[str, Any]:
     try:
         from kafka import KafkaAdminClient, KafkaConsumer, TopicPartition
 
-        kafka_config = _get_kafka_config(timeout_ms=30000)
+        kafka_config = get_kafka_config(timeout_ms=30000)
 
         admin = KafkaAdminClient(**kafka_config)
-        topic_names = [t for t in admin.list_topics() if not t.startswith("__")]
+        topic_names = [
+            t for t in admin.list_topics() if not t.startswith("__") and "__assignor" not in t
+        ]
         admin.close()
 
         if topic_names:

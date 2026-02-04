@@ -183,6 +183,10 @@ class ProducerSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="PRODUCER_")
 
+    impl: Literal["confluent", "kafka_python", "quix"] = Field(
+        default="confluent",
+        description="Producer implementation (confluent, kafka_python, quix)",
+    )
     data_file: Path = Field(default=Path("data/events.csv"), description="Path to events CSV file")
 
     @property
@@ -218,13 +222,18 @@ class PostgreSQLConsumerSettings(BaseSettings):
 
 
 class ConsumerSettings(BaseSettings):
-    """Kafka consumer settings for Mage streaming pipelines.
+    """Kafka consumer settings.
 
-    Used by Mage data loaders to configure Kafka consumption behavior.
+    Controls which streaming framework implementation is used for consuming
+    events and common consumer configuration.
     """
 
     model_config = SettingsConfigDict(env_prefix="CONSUMER_")
 
+    impl: Literal["confluent", "kafka_python", "quix", "mage", "bytewax"] = Field(
+        default="confluent",
+        description="Consumer implementation (confluent, kafka_python, quix, mage, bytewax)",
+    )
     auto_offset_reset: str = Field(
         default="earliest",
         description="Auto offset reset policy (earliest, latest, none)",
@@ -240,24 +249,6 @@ class ConsumerSettings(BaseSettings):
     session_timeout_minutes: int = Field(
         default=30,
         description="Session inactivity timeout in minutes",
-    )
-
-
-class StreamingSettings(BaseSettings):
-    """Streaming framework configuration.
-
-    Controls which streaming framework implementation is used:
-    - default: Raw kafka-python - lightweight baseline implementation
-    - quix: Quix Streams - recommended for production
-    - mage: Mage AI - alternative streaming framework
-    - bytewax: Bytewax - Python streaming with Rust performance
-    """
-
-    model_config = SettingsConfigDict(env_prefix="STREAMING_")
-
-    impl: Literal["default", "quix", "mage", "bytewax"] = Field(
-        default="default",
-        description="Streaming framework implementation (default, quix, mage, bytewax)",
     )
 
 
@@ -279,7 +270,6 @@ class Settings(BaseSettings):
     )
     consumer: ConsumerSettings = Field(default_factory=ConsumerSettings)
     aiven: AivenSettings = Field(default_factory=AivenSettings)
-    streaming: StreamingSettings = Field(default_factory=StreamingSettings)
 
     # General settings
     debug: bool = Field(default=False, description="Enable debug mode")

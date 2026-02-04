@@ -19,8 +19,8 @@ from pathlib import Path
 # ==============================================================================
 
 # Producer files
-PRODUCER_PID_FILE = Path("/tmp/kafka_producer.pid")
-PRODUCER_LOG_FILE = Path("/tmp/kafka_producer.log")
+PRODUCER_PID_FILE = Path("/tmp/producer.pid")
+PRODUCER_LOG_FILE = Path("/tmp/producer.log")
 
 
 def get_consumer_pid_file(instance: int, consumer_type: str) -> Path:

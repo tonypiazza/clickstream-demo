@@ -1,0 +1,7 @@
+# Mage Project Metadata
+# This file marks this directory as a Mage project root
+project_type: standalone
+variables_dir: .variables
+remote_variables_dir: .variables
+variables_retention_period: 48h
+help_improve_mage: false

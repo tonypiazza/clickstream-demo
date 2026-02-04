@@ -51,11 +51,12 @@ producer_app = typer.Typer(
 app.add_typer(producer_app, name="producer")
 
 # Register producer commands from cli.producer module
-from clickstream.cli.producer import producer_logs, producer_start, producer_stop
+from clickstream.cli.producer import producer_list, producer_logs, producer_start, producer_stop
 
 producer_app.command("start")(producer_start)
 producer_app.command("stop")(producer_stop)
 producer_app.command("logs")(producer_logs)
+producer_app.command("list")(producer_list)
 
 consumer_app = typer.Typer(
     help="Consumer pipeline operations",
@@ -65,6 +66,7 @@ app.add_typer(consumer_app, name="consumer")
 
 # Register consumer commands from cli.consumer module
 from clickstream.cli.consumer import (
+    consumer_list,
     consumer_logs,
     consumer_restart,
     consumer_start,
@@ -75,6 +77,7 @@ consumer_app.command("start")(consumer_start)
 consumer_app.command("stop")(consumer_stop)
 consumer_app.command("restart")(consumer_restart)
 consumer_app.command("logs")(consumer_logs)
+consumer_app.command("list")(consumer_list)
 
 data_app = typer.Typer(
     help="Data management operations",

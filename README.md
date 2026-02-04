@@ -211,22 +211,32 @@ clickstream/
 
 ## Key Design Decisions
 
-### Pluggable Framework Architecture
+### Pluggable Producer and Consumer Architecture
 
-The project uses a **framework abstraction layer** that allows switching between streaming implementations:
+The project uses a **modular architecture** with separate producer and consumer implementations that can be mixed and matched:
 
 ```python
-from clickstream.framework import get_framework
+from clickstream.producers import get_producer
+from clickstream.consumers import get_consumer
 
-framework = get_framework()  # Returns DefaultFramework, QuixFramework, BytewaxFramework, or MageFramework
-framework.run_consumer("postgresql", instance=0)
-framework.run_producer(limit=1000)
+# Get producer (controlled by PRODUCER_IMPL env var)
+producer = get_producer()  # Returns KafkaPythonProducer or QuixProducer
+producer.run(limit=1000)
+
+# Get consumer (controlled by CONSUMER_IMPL env var)
+consumer = get_consumer("postgresql")  # Returns implementation-specific consumer
+consumer.run()
 ```
 
-Each framework implements the same `StreamingFramework` interface, making it easy to:
+**Available implementations:**
+- **Producer**: `kafka_python` (default), `quix`
+- **Consumer**: `kafka_python` (default), `quix`, `mage`, `bytewax`
+
+This separation allows you to:
+- Use different implementations for producing vs consuming
 - Compare performance across implementations
 - Choose the right tool for your environment
-- Add new frameworks without changing application code
+- Add new implementations without changing application code
 
 ### Valkey for Session State
 

@@ -11,6 +11,7 @@ import logging
 import os
 import signal
 import sys
+import time
 import warnings
 
 # Suppress noisy warnings
@@ -70,19 +71,20 @@ def main():
     limit_env = os.environ.get("PRODUCER_LIMIT")
     limit = int(limit_env) if limit_env else None
 
-    # Get framework and producer
-    from clickstream.framework import get_framework
+    # Get producer
+    from clickstream.producers import get_producer
+    from clickstream.utils.session_state import get_producer_messages
     from clickstream.utils.versions import get_clickstream_version
 
-    framework = get_framework()
-    producer = framework.get_producer()
+    producer = get_producer()
 
     logger.info(
         "Producer started | %s | clickstream-demo v%s",
-        producer.version,
+        producer.name,
         get_clickstream_version(),
     )
 
+    start_time = time.time()
     try:
         producer.run(limit=limit, realtime=realtime_mode, speed=speed)
 
@@ -93,6 +95,18 @@ def main():
     except Exception as e:
         logger.exception("Producer error: %s", e)
         sys.exit(1)
+
+    # Log producer duration and throughput
+    duration = time.time() - start_time
+    events_sent = get_producer_messages() or 0
+    throughput = round(events_sent / duration) if duration > 0 else 0
+    logger.info(
+        "Producer completed | %s | %d events | %.1f seconds | %d events/sec",
+        producer.name,
+        events_sent,
+        duration,
+        throughput,
+    )
 
     logger.info("Producer shutdown complete.")
 

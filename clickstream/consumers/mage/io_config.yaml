@@ -1,0 +1,44 @@
+# Mage IO Configuration
+# Kafka and database connections are configured via environment variables
+# This file provides Mage-specific configuration structure
+
+version: 0.1.1
+default:
+  # Kafka settings loaded from environment
+  KAFKA_BOOTSTRAP_SERVERS: "{{ env_var('KAFKA_BOOTSTRAP_SERVERS') }}"
+  KAFKA_SECURITY_PROTOCOL: "{{ env_var('KAFKA_SECURITY_PROTOCOL', 'PLAINTEXT') }}"
+  KAFKA_SSL_CA_FILE: "{{ env_var('KAFKA_SSL_CA_FILE', '') }}"
+  KAFKA_SSL_CERT_FILE: "{{ env_var('KAFKA_SSL_CERT_FILE', '') }}"
+  KAFKA_SSL_KEY_FILE: "{{ env_var('KAFKA_SSL_KEY_FILE', '') }}"
+  KAFKA_EVENTS_TOPIC: "{{ env_var('KAFKA_EVENTS_TOPIC', 'clickstream-events') }}"
+  
+  # PostgreSQL settings loaded from environment
+  PG_HOST: "{{ env_var('PG_HOST') }}"
+  PG_PORT: "{{ env_var('PG_PORT', '5432') }}"
+  PG_USER: "{{ env_var('PG_USER') }}"
+  PG_PASSWORD: "{{ env_var('PG_PASSWORD') }}"
+  PG_DATABASE: "{{ env_var('PG_DATABASE', 'clickstream') }}"
+  PG_SCHEMA: "{{ env_var('PG_SCHEMA_NAME', 'clickstream') }}"
+  PG_SSLMODE: "{{ env_var('PG_SSLMODE', 'require') }}"
+  
+  # Valkey settings loaded from environment
+  VALKEY_HOST: "{{ env_var('VALKEY_HOST', 'localhost') }}"
+  VALKEY_PORT: "{{ env_var('VALKEY_PORT', '6379') }}"
+  VALKEY_PASSWORD: "{{ env_var('VALKEY_PASSWORD', '') }}"
+  VALKEY_SSL: "{{ env_var('VALKEY_SSL', 'false') }}"
+  
+  # OpenSearch settings loaded from environment
+  OPENSEARCH_HOST: "{{ env_var('OPENSEARCH_HOST', 'localhost') }}"
+  OPENSEARCH_PORT: "{{ env_var('OPENSEARCH_PORT', '9200') }}"
+  OPENSEARCH_USER: "{{ env_var('OPENSEARCH_USER', 'admin') }}"
+  OPENSEARCH_PASSWORD: "{{ env_var('OPENSEARCH_PASSWORD', 'admin') }}"
+  OPENSEARCH_USE_SSL: "{{ env_var('OPENSEARCH_USE_SSL', 'true') }}"
+  OPENSEARCH_VERIFY_CERTS: "{{ env_var('OPENSEARCH_VERIFY_CERTS', 'true') }}"
+  OPENSEARCH_EVENTS_INDEX: "{{ env_var('OPENSEARCH_EVENTS_INDEX', 'clickstream-events') }}"
+  
+  # Consumer settings
+  POSTGRESQL_CONSUMER_GROUP_ID: "{{ env_var('POSTGRESQL_CONSUMER_GROUP_ID', 'clickstream-postgresql') }}"
+  OPENSEARCH_CONSUMER_GROUP_ID: "{{ env_var('OPENSEARCH_CONSUMER_GROUP_ID', 'clickstream-opensearch') }}"
+  POSTGRESQL_CONSUMER_SESSION_TIMEOUT_MINUTES: "{{ env_var('POSTGRESQL_CONSUMER_SESSION_TIMEOUT_MINUTES', '30') }}"
+  CONSUMER_BATCH_SIZE: "{{ env_var('CONSUMER_BATCH_SIZE', '1000') }}"
+  CONSUMER_POLL_TIMEOUT_MS: "{{ env_var('CONSUMER_POLL_TIMEOUT_MS', '250') }}"

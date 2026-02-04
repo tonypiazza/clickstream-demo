@@ -1,0 +1,12 @@
+blocks:
+- uuid: kafka_source_opensearch
+  type: data_loader
+  downstream_blocks:
+  - save_to_opensearch
+- uuid: save_to_opensearch
+  type: data_exporter
+  upstream_blocks:
+  - kafka_source_opensearch
+name: opensearch_consumer
+type: streaming
+uuid: opensearch_consumer

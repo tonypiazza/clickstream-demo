@@ -25,18 +25,18 @@ from clickstream.cli.shared import (
     C,
     I,
     PRODUCER_PID_FILE,
-    _count_running_consumers,
-    _get_all_consumer_pids,
-    _purge_kafka_topic,
-    _reset_consumer_group,
-    _start_consumer_instance,
-    _stop_all_consumers,
+    count_running_consumers,
+    get_all_consumer_pids,
+    purge_kafka_topic,
+    reset_consumer_group,
+    start_consumer_instance,
+    stop_all_consumers,
     check_db_connection,
     check_kafka_connection,
     get_project_root,
     is_process_running,
 )
-from clickstream.framework import get_framework
+from clickstream.consumers import get_consumer
 from clickstream.utils.config import get_settings
 from clickstream.utils.session_state import get_kafka_consumer_lag
 
@@ -247,8 +247,9 @@ def _print_summary(results: list[tuple[int, int]], is_incremental: bool) -> None
 
 def benchmark_run(
     limit: Annotated[
-        int, typer.Option("--limit", "-l", help="Number of events to produce")
-    ] = 100000,
+        Optional[int],
+        typer.Option("--limit", "-l", help="Number of events to produce (default: all)"),
+    ] = None,
     output: Annotated[Path, typer.Option("--output", "-o", help="Output CSV file")] = Path(
         "benchmark_results.csv"
     ),
@@ -283,11 +284,11 @@ def benchmark_run(
     KAFKA_EVENTS_TOPIC_PARTITIONS in your .env file.
 
     Examples:
-        clickstream benchmark run --limit 100000 -y
-        clickstream benchmark run --limit 100000 --runs 5 -y           # 5 runs for averaging
+        clickstream benchmark run -y                                       # All events
+        clickstream benchmark run --limit 100000 -y                        # Specific limit
+        clickstream benchmark run --limit 100000 --runs 5 -y               # 5 runs for averaging
         clickstream benchmark run --limit 100000 --increment 50000 --runs 5 -y  # Incremental
-        clickstream benchmark run --limit 100000 --runs 5 --quiet -y   # Programmatic use
-        clickstream benchmark run --offset 10000 --limit 5000 -y       # Skip first 10000 rows
+        clickstream benchmark run --offset 10000 --limit 5000 -y           # Skip first 10000 rows
     """
     from clickstream.utils.db import reset_schema
     from clickstream.utils.session_state import check_valkey_connection, get_valkey_client
@@ -314,6 +315,10 @@ def benchmark_run(
         print(f"{C.BRIGHT_RED}{I.CROSS} --offset must be non-negative{C.RESET}")
         raise typer.Exit(1)
 
+    if limit is None and increment > 0:
+        print(f"{C.BRIGHT_RED}{I.CROSS} --increment requires --limit{C.RESET}")
+        raise typer.Exit(1)
+
     # Count CSV rows once for validation
     events_file = get_project_root() / "data" / "events.csv"
     if not events_file.exists():
@@ -321,6 +326,10 @@ def benchmark_run(
         raise typer.Exit(1)
 
     total_rows = _get_csv_row_count(events_file)
+
+    # Default to all available rows (accounting for offset)
+    if limit is None:
+        limit = total_rows - offset
 
     if offset >= total_rows:
         print(
@@ -343,12 +352,12 @@ def benchmark_run(
 
     settings = get_settings()
     partitions = settings.kafka.events_topic_partitions
-    framework = get_framework()
+    consumer = get_consumer("postgresql")
 
     # Configuration display
     _print()
     _print(f"  {C.BOLD}Benchmark Configuration{C.RESET}")
-    _print(f"  • Streaming framework:  {C.WHITE}{framework.name}{C.RESET}")
+    _print(f"  • Consumer Impl:        {C.WHITE}{settings.consumer.impl}{C.RESET}")
     _print(f"  • Partitions/Consumers: {C.WHITE}{partitions}{C.RESET}")
     if offset > 0:
         _print(f"  • Offset (rows to skip): {C.WHITE}{offset:,}{C.RESET}")
@@ -374,7 +383,7 @@ def benchmark_run(
     _print(f"  {C.BOLD}Pre-flight checks{C.RESET}")
 
     # Check consumer is stopped
-    running_consumers = _count_running_consumers()
+    running_consumers = count_running_consumers()
     if running_consumers > 0:
         print(
             f"{C.BRIGHT_RED}{I.CROSS} Consumer is running ({running_consumers} instances) - "
@@ -438,12 +447,12 @@ def benchmark_run(
 
             # Reset data
             topic = settings.kafka.events_topic
-            _purge_kafka_topic(topic)
+            purge_kafka_topic(topic)
             reset_schema()
             client = get_valkey_client()
             client.flushall()
             consumer_group = settings.postgresql_consumer.group_id
-            _reset_consumer_group(consumer_group)
+            reset_consumer_group(consumer_group)
             _print(f"  {C.BRIGHT_GREEN}{I.CHECK}{C.RESET} Resetting data")
 
             # Start consumers
@@ -451,19 +460,19 @@ def benchmark_run(
             runner_script = project_root / "clickstream" / "consumer_runner.py"
 
             for i in range(partitions):
-                _start_consumer_instance(runner_script, i, project_root)
+                start_consumer_instance(runner_script, i, project_root)
                 if i < partitions - 1:
                     time.sleep(1)
 
             time.sleep(2)
 
-            running = _get_all_consumer_pids()
+            running = get_all_consumer_pids()
             if len(running) != partitions:
                 _print(f"  {C.BRIGHT_RED}{I.CROSS}{C.RESET} Starting {partitions} consumer(s)")
                 _print(
                     f"    {C.BRIGHT_RED}Only {len(running)}/{partitions} consumers started{C.RESET}"
                 )
-                _stop_all_consumers()
+                stop_all_consumers()
                 if not quiet:
                     print(
                         f"  {C.BRIGHT_YELLOW}{I.WARN} Run {run_num} failed, continuing...{C.RESET}"
@@ -478,7 +487,7 @@ def benchmark_run(
                 _print(
                     f"  {C.BRIGHT_RED}{I.CROSS}{C.RESET} Running producer ({current_limit:,} events)"
                 )
-                _stop_all_consumers()
+                stop_all_consumers()
                 if not quiet:
                     print(
                         f"  {C.BRIGHT_YELLOW}{I.WARN} Run {run_num} failed, continuing...{C.RESET}"
@@ -496,7 +505,7 @@ def benchmark_run(
             )
 
             # Stop consumers
-            _stop_all_consumers()
+            stop_all_consumers()
             _print(f"  {C.BRIGHT_GREEN}{I.CHECK}{C.RESET} Stopping consumers")
 
             # Calculate throughput
@@ -511,10 +520,10 @@ def benchmark_run(
             # Write to CSV
             timestamp = datetime.now().isoformat(timespec="seconds")
             environment = settings.detect_environment()
-            framework_name = framework.name
+            consumer_name = consumer.name
 
-            base_header = "timestamp,environment,framework,partitions,events_produced,events_consumed,duration_sec,throughput_events_sec"
-            base_row = f"{timestamp},{environment},{framework_name},{partitions},{current_limit},{events_consumed},{round(duration)},{throughput}"
+            base_header = "timestamp,environment,consumer_impl,partitions,events_produced,events_consumed,duration_sec,throughput_events_sec"
+            base_row = f"{timestamp},{environment},{consumer_name},{partitions},{current_limit},{events_consumed},{round(duration)},{throughput}"
 
             if network and network_metrics:
                 csv_header = f"{base_header},kafka_latency_ms,pg_latency_ms,valkey_latency_ms,upload_mbps,ping_ms\n"
@@ -545,7 +554,7 @@ def benchmark_run(
                 f.write(csv_row)
 
         except Exception as e:
-            _stop_all_consumers()
+            stop_all_consumers()
             if not quiet:
                 print(f"  {C.BRIGHT_RED}{I.CROSS} Run {run_num} failed: {e}{C.RESET}")
             continue
@@ -709,7 +718,7 @@ def benchmark_show(
     column_config = [
         ("timestamp", "Timestamp", "left", lambda v: v[:16].replace("T", " ") if v else ""),
         ("environment", "Env", "left", lambda v: v or ""),
-        ("framework", "Framework", "left", lambda v: v or ""),
+        ("consumer_impl", "Consumer Impl", "left", lambda v: v or ""),
         ("partitions", "Parts", "right", lambda v: v or ""),
         ("events_produced", "Produced", "right", lambda v: f"{int(v):,}" if v else ""),
         ("events_consumed", "Consumed", "right", lambda v: f"{int(v):,}" if v else ""),

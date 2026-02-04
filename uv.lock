@@ -293,6 +293,23 @@ css = [
 ]
 
 [[package]]
+name = "bytewax"
+version = "0.21.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "prometheus-client" },
+    { name = "typing-extensions" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/41/eb/ee253e60ab676e2a70aa306cffee67d6a6a40993c8467d3b83ea8bb91e99/bytewax-0.21.1-cp312-cp312-macosx_10_12_x86_64.whl", hash = "sha256:62f5edef91908e555b70f3794271cd29ff29132a63b0b5cd367c5f53695a3c14", size = 6140409, upload-time = "2024-11-25T20:09:56.772Z" },
+    { url = "https://files.pythonhosted.org/packages/38/ef/4dd07083f32f9b019101837a10dc97806fbe3455c70f8cd976eb987dedab/bytewax-0.21.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:e3ab20069f323ffe508249d72c8c708cac05fddea11b74943103c623676785b6", size = 6041464, upload-time = "2024-11-25T20:09:58.244Z" },
+    { url = "https://files.pythonhosted.org/packages/20/1c/41b84d0de3949d75dd52b4b04341bed1c72250c4c1e017b527d7f7570f0b/bytewax-0.21.1-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:ed8da9bfceb3299df8cf4e8e7efbbda924dbbfea990dff50c8602a059dc8b9cf", size = 7953966, upload-time = "2024-11-25T20:09:59.709Z" },
+    { url = "https://files.pythonhosted.org/packages/87/f2/57829eea0d188bd1d54e2555a11ecfd3589ec66d710c8163fb7010a0c82e/bytewax-0.21.1-cp312-cp312-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:ba078e8bc7c6f1e7d7c99c4c07433977717b949112fc53377a0b0f3289398072", size = 7681915, upload-time = "2024-11-25T20:10:01.819Z" },
+    { url = "https://files.pythonhosted.org/packages/1f/66/47d1dbdd2a035074b2be3eac983d15742cc2749fee24aa3cc0c505277622/bytewax-0.21.1-cp312-cp312-manylinux_2_31_x86_64.whl", hash = "sha256:a118a61a5fc5a1849605e062f80e897922dbdadd37790cf8379e8f1e000d463c", size = 7983932, upload-time = "2024-11-25T20:10:03.284Z" },
+    { url = "https://files.pythonhosted.org/packages/de/bc/82686047e63fa709dc084399230c430c4fd2f2f2de3cf8be8d339ebd3f21/bytewax-0.21.1-cp312-none-win_amd64.whl", hash = "sha256:9b3c44984fe76da1fbac941392103610f884523a733a43fcd74543927c179854", size = 5183365, upload-time = "2024-11-25T20:10:04.676Z" },
+]
+
+[[package]]
 name = "cachetools"
 version = "7.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -375,8 +392,10 @@ name = "clickstream-demo"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "confluent-kafka" },
     { name = "jinja2" },
     { name = "kafka-python" },
+    { name = "lz4" },
     { name = "opensearch-py" },
     { name = "polars" },
     { name = "psutil" },
@@ -384,7 +403,6 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
-    { name = "quixstreams" },
     { name = "redis" },
     { name = "speedtest-cli" },
     { name = "sshtunnel" },
@@ -393,9 +411,8 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-all = [
-    { name = "mage-ai" },
-    { name = "pandas" },
+bytewax = [
+    { name = "bytewax" },
 ]
 dev = [
     { name = "mypy" },
@@ -407,16 +424,20 @@ mage = [
     { name = "mage-ai" },
     { name = "pandas" },
 ]
+quix = [
+    { name = "quixstreams" },
+]
 
 [package.metadata]
 requires-dist = [
+    { name = "bytewax", marker = "extra == 'bytewax'", specifier = ">=0.21" },
+    { name = "confluent-kafka", specifier = ">=2.0" },
     { name = "jinja2", specifier = ">=3.1.3" },
     { name = "kafka-python", specifier = ">=2.0.2" },
-    { name = "mage-ai", marker = "extra == 'all'", specifier = ">=0.9.73" },
+    { name = "lz4", specifier = ">=4.0" },
     { name = "mage-ai", marker = "extra == 'mage'", specifier = ">=0.9.73" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0" },
     { name = "opensearch-py", specifier = ">=2.4" },
-    { name = "pandas", marker = "extra == 'all'", specifier = "<3.0" },
     { name = "pandas", marker = "extra == 'mage'", specifier = "<3.0" },
     { name = "polars", specifier = ">=1.30.0" },
     { name = "psutil", specifier = ">=5.9" },
@@ -426,7 +447,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21" },
     { name = "python-dotenv", specifier = ">=1.0" },
-    { name = "quixstreams", specifier = ">=3.0" },
+    { name = "quixstreams", marker = "extra == 'quix'", specifier = ">=3.0" },
     { name = "redis", specifier = ">=5.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1" },
     { name = "speedtest-cli", specifier = ">=2.1.3" },
@@ -434,7 +455,7 @@ requires-dist = [
     { name = "tenacity", specifier = ">=8.0" },
     { name = "typer", extras = ["all"], specifier = "==0.9.0" },
 ]
-provides-extras = ["dev", "mage", "all"]
+provides-extras = ["dev", "mage", "quix", "bytewax"]
 
 [[package]]
 name = "cloudpickle"
@@ -1357,6 +1378,22 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/2f/83/97b29fe05cb6ae28d2dbd30b81e2e402a3eed5f460c26e9eaa5895ceacf5/locket-1.0.0.tar.gz", hash = "sha256:5c0d4c052a8bbbf750e056a8e65ccd309086f4f0f18a2eac306a8dfa4112a632", size = 4350, upload-time = "2022-04-20T22:04:44.312Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/db/bc/83e112abc66cd466c6b83f99118035867cecd41802f8d044638aa78a106e/locket-1.0.0-py2.py3-none-any.whl", hash = "sha256:b6c819a722f7b6bd955b80781788e4a66a55628b858d347536b7e81325a3a5e3", size = 4398, upload-time = "2022-04-20T22:04:42.23Z" },
+]
+
+[[package]]
+name = "lz4"
+version = "4.4.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/57/51/f1b86d93029f418033dddf9b9f79c8d2641e7454080478ee2aab5123173e/lz4-4.4.5.tar.gz", hash = "sha256:5f0b9e53c1e82e88c10d7c180069363980136b9d7a8306c4dca4f760d60c39f0", size = 172886, upload-time = "2025-11-03T13:02:36.061Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1b/ac/016e4f6de37d806f7cc8f13add0a46c9a7cfc41a5ddc2bc831d7954cf1ce/lz4-4.4.5-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:df5aa4cead2044bab83e0ebae56e0944cc7fcc1505c7787e9e1057d6d549897e", size = 207163, upload-time = "2025-11-03T13:01:45.895Z" },
+    { url = "https://files.pythonhosted.org/packages/8d/df/0fadac6e5bd31b6f34a1a8dbd4db6a7606e70715387c27368586455b7fc9/lz4-4.4.5-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:6d0bf51e7745484d2092b3a51ae6eb58c3bd3ce0300cf2b2c14f76c536d5697a", size = 207150, upload-time = "2025-11-03T13:01:47.205Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/17/34e36cc49bb16ca73fb57fbd4c5eaa61760c6b64bce91fcb4e0f4a97f852/lz4-4.4.5-cp312-cp312-manylinux1_i686.manylinux_2_28_i686.manylinux_2_5_i686.whl", hash = "sha256:7b62f94b523c251cf32aa4ab555f14d39bd1a9df385b72443fd76d7c7fb051f5", size = 1292045, upload-time = "2025-11-03T13:01:48.667Z" },
+    { url = "https://files.pythonhosted.org/packages/90/1c/b1d8e3741e9fc89ed3b5f7ef5f22586c07ed6bb04e8343c2e98f0fa7ff04/lz4-4.4.5-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:2c3ea562c3af274264444819ae9b14dbbf1ab070aff214a05e97db6896c7597e", size = 1279546, upload-time = "2025-11-03T13:01:50.159Z" },
+    { url = "https://files.pythonhosted.org/packages/55/d9/e3867222474f6c1b76e89f3bd914595af69f55bf2c1866e984c548afdc15/lz4-4.4.5-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:24092635f47538b392c4eaeff14c7270d2c8e806bf4be2a6446a378591c5e69e", size = 1368249, upload-time = "2025-11-03T13:01:51.273Z" },
+    { url = "https://files.pythonhosted.org/packages/b2/e7/d667d337367686311c38b580d1ca3d5a23a6617e129f26becd4f5dc458df/lz4-4.4.5-cp312-cp312-win32.whl", hash = "sha256:214e37cfe270948ea7eb777229e211c601a3e0875541c1035ab408fbceaddf50", size = 88189, upload-time = "2025-11-03T13:01:52.605Z" },
+    { url = "https://files.pythonhosted.org/packages/a5/0b/a54cd7406995ab097fceb907c7eb13a6ddd49e0b231e448f1a81a50af65c/lz4-4.4.5-cp312-cp312-win_amd64.whl", hash = "sha256:713a777de88a73425cf08eb11f742cd2c98628e79a8673d6a52e3c5f0c116f33", size = 99497, upload-time = "2025-11-03T13:01:53.477Z" },
+    { url = "https://files.pythonhosted.org/packages/6a/7e/dc28a952e4bfa32ca16fa2eb026e7a6ce5d1411fcd5986cd08c74ec187b9/lz4-4.4.5-cp312-cp312-win_arm64.whl", hash = "sha256:a88cbb729cc333334ccfb52f070463c21560fca63afcf636a9f160a55fac3301", size = 91279, upload-time = "2025-11-03T13:01:54.419Z" },
 ]
 
 [[package]]

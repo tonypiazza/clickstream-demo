@@ -41,9 +41,83 @@ def _parse_realtime_speed(value: str) -> int:
         raise typer.BadParameter(f"Invalid speed '{value}'. Use integer like 2, 10, or 10x")
 
 
+def _check_package_installed(package_name: str) -> bool:
+    """Check if a Python package is installed."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        version(package_name)
+        return True
+    except PackageNotFoundError:
+        return False
+
+
+def _get_package_version_safe(package_name: str) -> str | None:
+    """Get package version or None if not installed."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version(package_name)
+    except PackageNotFoundError:
+        return None
+
+
 # ==============================================================================
 # Commands
 # ==============================================================================
+
+
+def producer_list() -> None:
+    """List all available producer implementations.
+
+    Shows all producer options with version info and indicates which one
+    is currently active.
+
+    Examples:
+        clickstream producer list
+    """
+    from clickstream.utils.config import get_settings
+
+    settings = get_settings()
+    current_impl = settings.producer.impl
+
+    # Define available producers: (impl_key, package_name, description)
+    producers = [
+        ("confluent", "confluent-kafka", "librdkafka C library (fastest)"),
+        ("kafka_python", "kafka-python", "Pure Python implementation"),
+        ("quix", "quixstreams", "Quix Streams producer API"),
+    ]
+
+    print()
+    print(f"  {C.BOLD}Available Producers:{C.RESET}")
+    print()
+
+    for impl, package_name, description in producers:
+        # Check if this is the active implementation
+        if impl == current_impl:
+            marker = f"{C.BRIGHT_GREEN}{I.CHECK}{C.RESET}"
+        else:
+            marker = " "
+
+        # Get version or installation status
+        pkg_version = _get_package_version_safe(package_name)
+        if pkg_version:
+            version_str = f"v{pkg_version}"
+            status_color = C.WHITE
+        else:
+            version_str = "(not installed)"
+            status_color = C.DIM
+
+        # Format: marker impl_name version - description
+        print(
+            f"  {marker} {status_color}{impl:14}{C.RESET} "
+            f"{C.DIM}{version_str:16}{C.RESET} {C.DIM}{description}{C.RESET}"
+        )
+
+    print()
+    print(f"  {C.DIM}Currently active:{C.RESET} {C.WHITE}{current_impl}{C.RESET}")
+    print(f"  {C.DIM}Set via:{C.RESET} PRODUCER_IMPL environment variable")
+    print()
 
 
 def producer_start(

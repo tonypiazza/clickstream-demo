@@ -1,0 +1,18 @@
+blocks:
+- uuid: kafka_source
+  type: data_loader
+  downstream_blocks:
+  - process_events
+- uuid: process_events
+  type: transformer
+  upstream_blocks:
+  - kafka_source
+  downstream_blocks:
+  - save_to_postgresql
+- uuid: save_to_postgresql
+  type: data_exporter
+  upstream_blocks:
+  - process_events
+name: postgresql_consumer
+type: streaming
+uuid: postgresql_consumer

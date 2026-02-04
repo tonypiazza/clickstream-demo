@@ -1,0 +1,6 @@
+connector_type: kafka
+bootstrap_server: "{{ env_var('KAFKA_BOOTSTRAP_SERVERS') }}"
+topic: "{{ env_var('KAFKA_EVENTS_TOPIC', 'clickstream-events') }}"
+consumer_group: "{{ env_var('OPENSEARCH_CONSUMER_GROUP_ID', 'clickstream-opensearch') }}"
+batch_size: 1000
+timeout_ms: 250

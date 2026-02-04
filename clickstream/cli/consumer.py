@@ -27,17 +27,17 @@ class ConsumerType(str, Enum):
 from clickstream.cli.shared import (
     C,
     I,
-    _count_running_consumers,
-    _get_all_consumer_pids,
-    _get_consumer_log_file,
-    _get_consumer_pid_file,
-    _get_opensearch_instance,
-    _get_topic_partition_count,
-    _is_opensearch_consumer_running,
-    _start_consumer_instance,
-    _start_opensearch_consumer,
-    _stop_all_consumers,
-    _stop_opensearch_consumer,
+    count_running_consumers,
+    get_all_consumer_pids,
+    get_consumer_log_file,
+    get_consumer_pid_file,
+    get_opensearch_instance,
+    get_topic_partition_count,
+    is_opensearch_consumer_running,
+    start_consumer_instance,
+    start_opensearch_consumer,
+    stop_all_consumers,
+    stop_opensearch_consumer,
     get_process_pid,
     get_project_root,
 )
@@ -76,9 +76,85 @@ def _show_log(log_file: Path, label: str, follow: bool, lines: int) -> None:
             print(line, end="")
 
 
+def _check_package_installed(package_name: str) -> bool:
+    """Check if a Python package is installed."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        version(package_name)
+        return True
+    except PackageNotFoundError:
+        return False
+
+
+def _get_package_version_safe(package_name: str) -> str | None:
+    """Get package version or None if not installed."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version(package_name)
+    except PackageNotFoundError:
+        return None
+
+
 # ==============================================================================
 # Commands
 # ==============================================================================
+
+
+def consumer_list() -> None:
+    """List all available consumer implementations.
+
+    Shows all consumer options with version info and indicates which one
+    is currently active.
+
+    Examples:
+        clickstream consumer list
+    """
+    from clickstream.utils.config import get_settings
+
+    settings = get_settings()
+    current_impl = settings.consumer.impl
+
+    # Define available consumers: (impl_key, package_name, description)
+    consumers = [
+        ("confluent", "confluent-kafka", "librdkafka C library (fastest)"),
+        ("kafka_python", "kafka-python", "Pure Python Kafka consumer"),
+        ("quix", "quixstreams", "Quix Streams consumer API"),
+        ("mage", "mage-ai", "Mage AI streaming pipelines"),
+        ("bytewax", "bytewax", "Bytewax dataflow engine"),
+    ]
+
+    print()
+    print(f"  {C.BOLD}Available Consumers:{C.RESET}")
+    print()
+
+    for impl, package_name, description in consumers:
+        # Check if this is the active implementation
+        if impl == current_impl:
+            marker = f"{C.BRIGHT_GREEN}{I.CHECK}{C.RESET}"
+        else:
+            marker = " "
+
+        # Get version or installation status
+        pkg_version = _get_package_version_safe(package_name)
+        if pkg_version:
+            version_str = f"v{pkg_version}"
+            status_color = C.WHITE
+        else:
+            version_str = "(not installed)"
+            status_color = C.DIM
+
+        # Format: marker impl_name version - description
+        print(
+            f"  {marker} {status_color}{impl:14}{C.RESET} "
+            f"{C.DIM}{version_str:16}{C.RESET} {C.DIM}{description}{C.RESET}"
+        )
+
+    print()
+    print(f"  {C.DIM}Currently active:{C.RESET} {C.WHITE}{current_impl}{C.RESET}")
+    print(f"  {C.DIM}Set via:{C.RESET} CONSUMER_IMPL environment variable")
+    print()
 
 
 def consumer_start(
@@ -158,11 +234,11 @@ def consumer_start(
         num_instances = instances
 
     # Check if already running (only for requested type)
-    running = _count_running_consumers()
-    opensearch_running = settings.opensearch.enabled and _is_opensearch_consumer_running()
+    running = count_running_consumers()
+    opensearch_running = settings.opensearch.enabled and is_opensearch_consumer_running()
 
     if start_postgresql and running > 0:
-        pids = _get_all_consumer_pids()
+        pids = get_all_consumer_pids()
         print(
             f"{C.BRIGHT_YELLOW}{I.STOP} PostgreSQL consumer is already running ({running} instances){C.RESET}"
         )
@@ -172,8 +248,8 @@ def consumer_start(
         raise typer.Exit(1)
 
     if start_opensearch and opensearch_running:
-        instance = _get_opensearch_instance()
-        os_pid_file = _get_consumer_pid_file(instance, "opensearch")
+        instance = get_opensearch_instance()
+        os_pid_file = get_consumer_pid_file(instance, "opensearch")
         os_pid = get_process_pid(os_pid_file)
         print(
             f"{C.BRIGHT_YELLOW}{I.STOP} OpenSearch consumer is already running (PID {os_pid}){C.RESET}"
@@ -184,7 +260,7 @@ def consumer_start(
     # Check topic partition count if topic exists (only if starting PostgreSQL)
     if start_postgresql:
         topic = settings.kafka.events_topic
-        existing_partitions = _get_topic_partition_count(topic)
+        existing_partitions = get_topic_partition_count(topic)
         if existing_partitions is not None and existing_partitions < max_instances:
             print(
                 f"{C.BRIGHT_RED}{I.CROSS} Topic '{topic}' has {existing_partitions} partitions, "
@@ -230,7 +306,7 @@ def consumer_start(
 
         # Start all instances (staggered to avoid Mage log directory race condition)
         for i in range(num_instances):
-            _start_consumer_instance(runner_script, i, project_root)
+            start_consumer_instance(runner_script, i, project_root)
             if i < num_instances - 1:
                 time.sleep(1)  # Stagger startup to avoid race condition
 
@@ -238,14 +314,14 @@ def consumer_start(
         time.sleep(2)
 
         # Verify they started
-        running = _get_all_consumer_pids()
+        running = get_all_consumer_pids()
         if len(running) == num_instances:
             print(
                 f"{C.BRIGHT_GREEN}{I.CHECK} PostgreSQL consumers started ({num_instances} instances){C.RESET}"
             )
             print(f"  Logs:")
             for i in range(num_instances):
-                log_file = _get_consumer_log_file(i, "postgresql")
+                log_file = get_consumer_log_file(i, "postgresql")
                 print(f"    {C.DIM}{log_file}{C.RESET}")
         else:
             print(
@@ -290,19 +366,19 @@ def consumer_start(
             raise typer.Exit(1)
 
         print(f"  Starting OpenSearch consumer...")
-        _start_opensearch_consumer(project_root)
+        start_opensearch_consumer(project_root)
         time.sleep(2)
 
-        if _is_opensearch_consumer_running():
-            instance = _get_opensearch_instance()
-            os_pid_file = _get_consumer_pid_file(instance, "opensearch")
-            os_log_file = _get_consumer_log_file(instance, "opensearch")
+        if is_opensearch_consumer_running():
+            instance = get_opensearch_instance()
+            os_pid_file = get_consumer_pid_file(instance, "opensearch")
+            os_log_file = get_consumer_log_file(instance, "opensearch")
             os_pid = get_process_pid(os_pid_file)
             print(f"{C.BRIGHT_GREEN}{I.CHECK} OpenSearch consumer started (PID {os_pid}){C.RESET}")
             print(f"  Log: {C.DIM}{os_log_file}{C.RESET}")
         else:
-            instance = _get_opensearch_instance()
-            os_log_file = _get_consumer_log_file(instance, "opensearch")
+            instance = get_opensearch_instance()
+            os_log_file = get_consumer_log_file(instance, "opensearch")
             print(f"{C.BRIGHT_RED}{I.CROSS} OpenSearch consumer failed to start{C.RESET}")
             print(f"  Check log: {C.DIM}{os_log_file}{C.RESET}")
             raise typer.Exit(1)
@@ -329,8 +405,8 @@ def consumer_stop(
     stop_postgresql = consumer_type in (ConsumerType.all, ConsumerType.postgresql)
     stop_opensearch = consumer_type in (ConsumerType.all, ConsumerType.opensearch)
 
-    running = _count_running_consumers()
-    opensearch_running = _is_opensearch_consumer_running()
+    running = count_running_consumers()
+    opensearch_running = is_opensearch_consumer_running()
 
     # Check if requested type(s) are running
     requested_running = False
@@ -350,14 +426,14 @@ def consumer_stop(
 
     if stop_postgresql and running > 0:
         print(f"  Stopping {running} PostgreSQL consumer instances...")
-        stopped = _stop_all_consumers()
+        stopped = stop_all_consumers()
         print(
             f"{C.BRIGHT_GREEN}{I.CHECK} PostgreSQL consumers stopped ({stopped} instances){C.RESET}"
         )
 
     if stop_opensearch and opensearch_running:
         print(f"  Stopping OpenSearch consumer...")
-        _stop_opensearch_consumer()
+        stop_opensearch_consumer()
         print(f"{C.BRIGHT_GREEN}{I.CHECK} OpenSearch consumer stopped{C.RESET}")
 
 
@@ -400,16 +476,16 @@ def consumer_restart(
     restart_opensearch = consumer_type in (ConsumerType.all, ConsumerType.opensearch)
 
     # Stop if running
-    running = _count_running_consumers()
-    opensearch_running = _is_opensearch_consumer_running()
+    running = count_running_consumers()
+    opensearch_running = is_opensearch_consumer_running()
 
     if restart_postgresql and running > 0:
         print(f"  Stopping {running} PostgreSQL consumer instances...")
-        _stop_all_consumers()
+        stop_all_consumers()
 
     if restart_opensearch and opensearch_running:
         print(f"  Stopping OpenSearch consumer...")
-        _stop_opensearch_consumer()
+        stop_opensearch_consumer()
 
     if (restart_postgresql and running > 0) or (restart_opensearch and opensearch_running):
         time.sleep(1)  # Brief pause to ensure clean shutdown

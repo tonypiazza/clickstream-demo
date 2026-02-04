@@ -22,7 +22,7 @@ from clickstream.cli.shared import (
     B,
     C,
     I,
-    # Box drawing helpers
+    # Box drawing helpers (private)
     _box_bottom,
     _box_header,
     _box_line,
@@ -32,9 +32,9 @@ from clickstream.cli.shared import (
     _status_badge,
     _visible_len,
     # Path helpers
-    _get_consumer_log_file,
-    _get_consumer_pid_file,
-    _get_opensearch_instance,
+    get_consumer_log_file,
+    get_consumer_pid_file,
+    get_opensearch_instance,
     get_mage_project_path,
     get_project_root,
     # Framework helpers
@@ -47,20 +47,20 @@ from clickstream.cli.shared import (
     start_background_process,
     stop_process,
     # Multi-consumer management
-    _count_running_consumers,
-    _get_all_consumer_pids,
-    _get_topic_partition_count,
-    _start_consumer_instance,
-    _stop_all_consumers,
+    count_running_consumers,
+    get_all_consumer_pids,
+    get_topic_partition_count,
+    start_consumer_instance,
+    stop_all_consumers,
     # OpenSearch consumer management
-    _is_opensearch_consumer_running,
-    _start_opensearch_consumer,
-    _stop_opensearch_consumer,
+    is_opensearch_consumer_running,
+    start_opensearch_consumer,
+    stop_opensearch_consumer,
     # Kafka helpers
-    _get_kafka_admin_client,
-    _get_kafka_config,
-    _purge_kafka_topic,
-    _reset_consumer_group,
+    get_kafka_admin_client,
+    get_kafka_config,
+    purge_kafka_topic,
+    reset_consumer_group,
     # Database helpers
     check_db_connection,
     check_kafka_connection,
@@ -79,7 +79,7 @@ __all__ = [
     "B",
     "C",
     "I",
-    # Box drawing helpers
+    # Box drawing helpers (private - kept for internal use)
     "_box_bottom",
     "_box_header",
     "_box_line",
@@ -89,9 +89,9 @@ __all__ = [
     "_status_badge",
     "_visible_len",
     # Path helpers
-    "_get_consumer_log_file",
-    "_get_consumer_pid_file",
-    "_get_opensearch_instance",
+    "get_consumer_log_file",
+    "get_consumer_pid_file",
+    "get_opensearch_instance",
     "get_mage_project_path",
     "get_project_root",
     # Framework helpers
@@ -104,20 +104,20 @@ __all__ = [
     "start_background_process",
     "stop_process",
     # Multi-consumer management
-    "_count_running_consumers",
-    "_get_all_consumer_pids",
-    "_get_topic_partition_count",
-    "_start_consumer_instance",
-    "_stop_all_consumers",
+    "count_running_consumers",
+    "get_all_consumer_pids",
+    "get_topic_partition_count",
+    "start_consumer_instance",
+    "stop_all_consumers",
     # OpenSearch consumer management
-    "_is_opensearch_consumer_running",
-    "_start_opensearch_consumer",
-    "_stop_opensearch_consumer",
+    "is_opensearch_consumer_running",
+    "start_opensearch_consumer",
+    "stop_opensearch_consumer",
     # Kafka helpers
-    "_get_kafka_admin_client",
-    "_get_kafka_config",
-    "_purge_kafka_topic",
-    "_reset_consumer_group",
+    "get_kafka_admin_client",
+    "get_kafka_config",
+    "purge_kafka_topic",
+    "reset_consumer_group",
     # Database helpers
     "check_db_connection",
     "check_kafka_connection",

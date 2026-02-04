@@ -5,12 +5,12 @@ description = "Clickstream data processing solution using Aiven services"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    # Stream processing
-    "quixstreams>=3.0",
+    # Kafka
+    "confluent-kafka>=2.0",
+    "kafka-python>=2.0.2",
+    "lz4>=4.0",  # Required for kafka-python LZ4 compression support
     # Data processing
     "polars>=1.30.0",
-    # Kafka
-    "kafka-python>=2.0.2",
     # PostgreSQL
     "psycopg2-binary>=2.9",
     # Valkey/Redis
@@ -49,12 +49,10 @@ mage = [
     "mage-ai>=0.9.73",
     "pandas<3.0",  # Required for mage-ai compatibility with jinja2==3.1.3
 ]
-bytewax = [
-    "bytewax>=0.21",
+quix = [
+    "quixstreams>=3.0",
 ]
-all = [
-    "mage-ai>=0.9.73",
-    "pandas<3.0",  # Required for mage-ai compatibility with jinja2==3.1.3
+bytewax = [
     "bytewax>=0.21",
 ]
 

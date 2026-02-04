@@ -1,1 +1,0 @@
-# OpenSearch Consumer Streaming Pipeline

@@ -25,8 +25,8 @@ from clickstream.utils.config import get_settings
 from clickstream.utils.paths import (
     PRODUCER_LOG_FILE,
     PRODUCER_PID_FILE,
-    get_consumer_log_file as _get_consumer_log_file,
-    get_consumer_pid_file as _get_consumer_pid_file,
+    get_consumer_log_file,
+    get_consumer_pid_file,
     get_mage_project_path,
     get_project_root,
 )
@@ -40,13 +40,16 @@ BOX_WIDTH = 68
 
 
 def get_active_framework_name() -> str:
-    """Get the human-readable name of the active streaming framework."""
-    from clickstream.framework import get_framework
+    """Get the human-readable name of the active streaming framework.
 
-    return get_framework().name
+    Returns the consumer implementation name since that's what processes events.
+    """
+    from clickstream.consumers import get_consumer
+
+    return get_consumer("postgresql").name
 
 
-def _get_opensearch_instance() -> int:
+def get_opensearch_instance() -> int:
     """Get the instance number for OpenSearch consumer (equals PostgreSQL partition count)."""
     return get_settings().kafka.events_topic_partitions
 
@@ -129,10 +132,51 @@ C, B, I = Colors, Box, Icons
 
 # Re-export from utils.paths for backward compatibility
 __all__ = [
+    # Constants
+    "BOX_WIDTH",
     "PRODUCER_PID_FILE",
     "PRODUCER_LOG_FILE",
+    # Classes
+    "Box",
+    "Colors",
+    "Icons",
+    # Aliases
+    "B",
+    "C",
+    "I",
+    # Path helpers
     "get_project_root",
     "get_mage_project_path",
+    "get_consumer_log_file",
+    "get_consumer_pid_file",
+    "get_opensearch_instance",
+    # Framework helpers
+    "get_active_framework_name",
+    # Database helpers
+    "check_db_connection",
+    "check_kafka_connection",
+    # Process management
+    "get_process_pid",
+    "get_process_start_time",
+    "get_process_end_time",
+    "is_process_running",
+    "start_background_process",
+    "stop_process",
+    # Multi-consumer management
+    "count_running_consumers",
+    "get_all_consumer_pids",
+    "get_topic_partition_count",
+    "start_consumer_instance",
+    "stop_all_consumers",
+    # OpenSearch consumer management
+    "is_opensearch_consumer_running",
+    "start_opensearch_consumer",
+    "stop_opensearch_consumer",
+    # Kafka helpers
+    "get_kafka_config",
+    "get_kafka_admin_client",
+    "purge_kafka_topic",
+    "reset_consumer_group",
 ]
 
 
@@ -315,7 +359,7 @@ def start_background_process(
 # ==============================================================================
 
 
-def _get_all_consumer_pids() -> list[tuple[int, int]]:
+def get_all_consumer_pids() -> list[tuple[int, int]]:
     """Get all running PostgreSQL consumer instances. Returns list of (instance, pid) tuples."""
     import glob
 
@@ -334,19 +378,19 @@ def _get_all_consumer_pids() -> list[tuple[int, int]]:
     return sorted(running)
 
 
-def _count_running_consumers() -> int:
+def count_running_consumers() -> int:
     """Count number of running consumer instances."""
-    return len(_get_all_consumer_pids())
+    return len(get_all_consumer_pids())
 
 
-def _start_consumer_instance(
+def start_consumer_instance(
     runner_script: Path,
     instance: int,
     project_root: Path,
 ) -> bool:
     """Start a single PostgreSQL consumer instance. Returns True if started successfully."""
-    pid_file = _get_consumer_pid_file(instance, "postgresql")
-    log_file = _get_consumer_log_file(instance, "postgresql")
+    pid_file = get_consumer_pid_file(instance, "postgresql")
+    log_file = get_consumer_log_file(instance, "postgresql")
 
     env = os.environ.copy()
     python_path = env.get("PYTHONPATH", "")
@@ -375,7 +419,7 @@ def _start_consumer_instance(
     return True
 
 
-def _stop_all_consumers() -> int:
+def stop_all_consumers() -> int:
     """Stop all running PostgreSQL consumer instances. Returns count of stopped processes."""
     import glob
 
@@ -405,11 +449,11 @@ def _stop_all_consumers() -> int:
     return stopped
 
 
-def _get_topic_partition_count(topic_name: str) -> Optional[int]:
+def get_topic_partition_count(topic_name: str) -> Optional[int]:
     """Get the number of partitions for a Kafka topic. Returns None if topic doesn't exist."""
-    from clickstream.infrastructure.kafka import get_topic_partition_count
+    from clickstream.infrastructure.kafka import get_topic_partition_count as _get_partition_count
 
-    return get_topic_partition_count(topic_name)
+    return _get_partition_count(topic_name)
 
 
 # ==============================================================================
@@ -417,17 +461,17 @@ def _get_topic_partition_count(topic_name: str) -> Optional[int]:
 # ==============================================================================
 
 
-def _is_opensearch_consumer_running() -> bool:
+def is_opensearch_consumer_running() -> bool:
     """Check if the OpenSearch consumer is running."""
-    instance = _get_opensearch_instance()
-    pid_file = _get_consumer_pid_file(instance, "opensearch")
+    instance = get_opensearch_instance()
+    pid_file = get_consumer_pid_file(instance, "opensearch")
     return is_process_running(pid_file)
 
 
-def _start_opensearch_consumer(project_root: Path) -> bool:
+def start_opensearch_consumer(project_root: Path) -> bool:
     """Start the OpenSearch consumer. Returns True if started successfully."""
-    instance = _get_opensearch_instance()
-    pid_file = _get_consumer_pid_file(instance, "opensearch")
+    instance = get_opensearch_instance()
+    pid_file = get_consumer_pid_file(instance, "opensearch")
     runner_script = project_root / "clickstream" / "consumer_runner.py"
 
     env = os.environ.copy()
@@ -457,10 +501,10 @@ def _start_opensearch_consumer(project_root: Path) -> bool:
     return True
 
 
-def _stop_opensearch_consumer() -> bool:
+def stop_opensearch_consumer() -> bool:
     """Stop the OpenSearch consumer. Returns True if stopped."""
-    instance = _get_opensearch_instance()
-    pid_file = _get_consumer_pid_file(instance, "opensearch")
+    instance = get_opensearch_instance()
+    pid_file = get_consumer_pid_file(instance, "opensearch")
     pid = get_process_pid(pid_file)
     if not pid:
         return False
@@ -491,7 +535,7 @@ def _stop_opensearch_consumer() -> bool:
 # ==============================================================================
 
 
-def _get_kafka_config(timeout_ms: int = 10000) -> dict:
+def get_kafka_config(timeout_ms: int = 10000) -> dict:
     """Get Kafka connection configuration dict.
 
     Args:
@@ -505,14 +549,14 @@ def _get_kafka_config(timeout_ms: int = 10000) -> dict:
     return build_kafka_config(request_timeout_ms=timeout_ms)
 
 
-def _get_kafka_admin_client():
+def get_kafka_admin_client():
     """Get a Kafka admin client with current settings."""
     from clickstream.infrastructure.kafka import get_admin_client
 
     return get_admin_client()
 
 
-def _purge_kafka_topic(topic_name: str) -> tuple[bool, int, str]:
+def purge_kafka_topic(topic_name: str) -> tuple[bool, int, str]:
     """
     Purge a Kafka topic by deleting and recreating it with the same config.
 
@@ -527,7 +571,7 @@ def _purge_kafka_topic(topic_name: str) -> tuple[bool, int, str]:
     return purge_topic(topic_name)
 
 
-def _reset_consumer_group(group_id: str) -> tuple[bool, str]:
+def reset_consumer_group(group_id: str) -> tuple[bool, str]:
     """
     Reset a Kafka consumer group by deleting it.
 
@@ -537,9 +581,9 @@ def _reset_consumer_group(group_id: str) -> tuple[bool, str]:
     Returns:
         Tuple of (success, error_message)
     """
-    from clickstream.infrastructure.kafka import reset_consumer_group
+    from clickstream.infrastructure.kafka import reset_consumer_group as _reset_group
 
-    return reset_consumer_group(group_id)
+    return _reset_group(group_id)
 
 
 # ==============================================================================

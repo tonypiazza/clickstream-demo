@@ -47,8 +47,12 @@ def config_show(
     # JSON output mode
     if json_output:
         config = {
-            "streaming": {
-                "framework": settings.streaming.impl,
+            "producer": {
+                "impl": settings.producer.impl,
+                "data_file": str(settings.producer.data_file),
+            },
+            "consumer": {
+                "impl": settings.consumer.impl,
             },
             "kafka": {
                 "bootstrap_servers": [
@@ -86,9 +90,6 @@ def config_show(
                 "ssl_enabled": settings.valkey.ssl,
                 "password": settings.valkey.password,
             },
-            "producer": {
-                "data_file": str(settings.producer.data_file),
-            },
             "postgresql_consumer": {
                 "group_id": settings.postgresql_consumer.group_id,
                 "session_timeout_minutes": settings.postgresql_consumer.session_timeout_minutes,
@@ -102,9 +103,15 @@ def config_show(
     print(f"{C.BOLD}Configuration{C.RESET}")
     print()
 
-    # Streaming Framework
-    print(f"{C.CYAN}Streaming{C.RESET}")
-    print(f"  Framework:  {C.WHITE}{settings.streaming.impl}{C.RESET}")
+    # Producer
+    print(f"{C.CYAN}Producer{C.RESET}")
+    print(f"  Impl:       {C.WHITE}{settings.producer.impl}{C.RESET}")
+    print(f"  Data File:  {C.WHITE}{settings.producer.data_file}{C.RESET}")
+    print()
+
+    # Consumer
+    print(f"{C.CYAN}Consumer{C.RESET}")
+    print(f"  Impl:       {C.WHITE}{settings.consumer.impl}{C.RESET}")
     print()
 
     # Kafka
@@ -154,11 +161,6 @@ def config_show(
     print(f"  Port:       {C.WHITE}{settings.valkey.port}{C.RESET}")
     valkey_ssl = "enabled" if settings.valkey.ssl else "disabled"
     print(f"  SSL:        {C.WHITE}{valkey_ssl}{C.RESET}")
-    print()
-
-    # Producer
-    print(f"{C.CYAN}Producer{C.RESET}")
-    print(f"  Data File:  {C.WHITE}{settings.producer.data_file}{C.RESET}")
     print()
 
     # PostgreSQL Consumer
