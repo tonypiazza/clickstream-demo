@@ -107,7 +107,7 @@ class StreamingConsumer(ABC):
         Human-readable description of parallelism for CLI output.
 
         Returns:
-            Description like "3 processes" or "1 process (3 workers)"
+            Description like "3 processes" or "1 process x 3 workers"
         """
         if self.num_instances == self.num_workers:
             if self.num_instances == 1:
@@ -115,8 +115,8 @@ class StreamingConsumer(ABC):
             return f"{self.num_instances} processes"
         else:
             if self.num_instances == 1:
-                return f"1 process ({self.num_workers} workers)"
-            return f"{self.num_instances} processes ({self.num_workers} workers)"
+                return f"1 process x {self.num_workers} workers"
+            return f"{self.num_instances} processes x {self.num_workers} workers"
 
     @abstractmethod
     def run(self) -> None:

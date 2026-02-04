@@ -41,8 +41,7 @@ def get_kafka_add_config(
     KafkaSourceWithCommit.
 
     Note: Our custom KafkaSourceWithCommit handles offset commits explicitly
-    after each batch, so auto-commit is disabled. This ensures accurate lag
-    tracking for monitoring purposes (status display, benchmarks).
+    after each batch, so auto-commit is disabled.
 
     Args:
         group_id: Consumer group ID (required for consumer)
@@ -58,6 +57,8 @@ def get_kafka_add_config(
         config["group.id"] = group_id
         # Auto-commit disabled - KafkaSourceWithCommit commits explicitly after each batch
         config["enable.auto.commit"] = "false"
+        # When no committed offset exists, start from earliest
+        config["auto.offset.reset"] = settings.consumer.auto_offset_reset
 
     # SSL configuration for Aiven
     if settings.kafka.security_protocol == "SSL":

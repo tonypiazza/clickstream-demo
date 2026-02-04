@@ -250,6 +250,10 @@ class ConsumerSettings(BaseSettings):
         default=30,
         description="Session inactivity timeout in minutes",
     )
+    benchmark_mode: bool = Field(
+        default=False,
+        description="Exit when all partitions reach EOF (for benchmarking)",
+    )
 
 
 class Settings(BaseSettings):

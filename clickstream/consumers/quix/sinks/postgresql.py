@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Optional
 import psycopg2
 from quixstreams.sinks.base import BatchingSink, SinkBackpressureError, SinkBatch
 
-from clickstream.infrastructure.metrics import set_last_message_timestamp
 from clickstream.infrastructure.repositories import (
     PostgreSQLEventRepository,
     PostgreSQLSessionRepository,
@@ -32,14 +31,12 @@ class PostgreSQLEventSink(BatchingSink):
     Wraps PostgreSQLEventRepository and handles Quix-specific concerns:
     - Extracting events from SinkBatch
     - Raising SinkBackpressureError on connection errors
-    - Updating last message timestamp for metrics
     """
 
-    def __init__(self, settings: Optional[Settings] = None, group_id: Optional[str] = None):
+    def __init__(self, settings: Optional[Settings] = None):
         super().__init__()
         self._settings = settings or get_settings()
         self._repo = PostgreSQLEventRepository(self._settings)
-        self._group_id = group_id
 
     def setup(self):
         """Called once when the sink starts."""
@@ -53,9 +50,6 @@ class PostgreSQLEventSink(BatchingSink):
 
         try:
             self._repo.save(events)
-
-            if self._group_id:
-                set_last_message_timestamp(self._group_id)
 
         except psycopg2.OperationalError as e:
             logger.warning("Connection error, requesting backpressure: %s", e)
@@ -147,21 +141,18 @@ class PostgreSQLSink(BatchingSink):
     1. Save events to PostgreSQL
     2. Batch update sessions in Valkey
     3. Save sessions to PostgreSQL (with retry on failure)
-    4. Update last message timestamp for metrics
     """
 
     def __init__(
         self,
         settings: Optional[Settings] = None,
         session_state: Optional["SessionState"] = None,
-        group_id: Optional[str] = None,
     ):
         super().__init__()
         self._settings = settings or get_settings()
         self._event_repo = PostgreSQLEventRepository(self._settings)
         self._session_repo = PostgreSQLSessionRepository(self._settings)
         self._session_state = session_state
-        self._group_id = group_id
 
     def setup(self):
         """Called once when the sink starts."""
@@ -188,10 +179,6 @@ class PostgreSQLSink(BatchingSink):
             if updated_sessions:
                 sessions = [self._session_state.to_db_record(s) for s in updated_sessions]
                 self._save_sessions_with_retry(sessions)
-
-            # 4. Track activity for status display
-            if self._group_id:
-                set_last_message_timestamp(self._group_id)
 
         except psycopg2.OperationalError as e:
             logger.warning("Connection error, requesting backpressure: %s", e)

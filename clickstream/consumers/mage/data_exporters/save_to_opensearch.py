@@ -3,8 +3,7 @@ OpenSearch Data Exporter for Mage Pipeline.
 
 This data exporter:
 1. Indexes events to OpenSearch
-2. Tracks last message timestamp for status display
-3. Commits Kafka offsets after successful indexing
+2. Commits Kafka offsets after successful indexing
 """
 
 from typing import Dict
@@ -47,25 +46,17 @@ def save_to_opensearch(data: Dict, *args, **kwargs) -> Dict:
     Returns:
         Dict with processing status
     """
-    from clickstream.utils.config import get_settings
-    from clickstream.utils.session_state import set_last_message_timestamp
-
     events = data.get("messages", [])
     consumer = data.get("consumer")
 
     if not events:
         return {"status": "no_data", "events": 0}
 
-    settings = get_settings()
-    group_id = settings.opensearch.consumer_group_id
     opensearch_repo = _get_repository()
 
     try:
         # Index events to OpenSearch
         opensearch_repo.save(events)
-
-        # Track activity for status display
-        set_last_message_timestamp(group_id)
 
         # Commit Kafka offsets after successful indexing
         if consumer:

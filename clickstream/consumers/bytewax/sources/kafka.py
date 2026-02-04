@@ -2,15 +2,14 @@
 # Custom Kafka Source with Explicit Offset Commits
 # ==============================================================================
 """
-Custom Kafka source with explicit offset commits for accurate lag tracking.
+Custom Kafka source with explicit offset commits.
 
 Bytewax's built-in KafkaSource uses consumer.assign() which bypasses Kafka's
 consumer group coordination. The auto-commit setting has no effect with assign()
 because auto-commit only works with subscribe().
 
 This custom source adds explicit consumer.commit() calls after each batch to
-ensure offsets are properly tracked in the consumer group for monitoring
-purposes (lag calculation, status display, benchmark accuracy).
+ensure offsets are properly tracked in the consumer group.
 
 Key differences from Bytewax's built-in KafkaSource:
 1. Explicit synchronous commits after each batch
@@ -232,11 +231,11 @@ class _KafkaSourcePartitionWithCommit(StatefulSourcePartition[KafkaSourceMessage
 
 class KafkaSourceWithCommit(FixedPartitionedSource[KafkaSourceMessage, Optional[int]]):
     """
-    Kafka source that explicitly commits offsets for accurate lag tracking.
+    Kafka source that explicitly commits offsets.
 
     This source is similar to Bytewax's built-in KafkaSource but adds explicit
     offset commits after each batch. This ensures that Kafka consumer group
-    offsets are properly tracked for monitoring purposes.
+    offsets are properly tracked.
 
     Key features:
     - Explicit synchronous commits after each batch

@@ -257,14 +257,24 @@ def run_producer(
 
             last_timestamp = event["timestamp"]
 
-            # Produce message
+            # Produce message with retry on queue full
             # Use visitor_id as key for partition affinity (same visitor -> same partition)
-            producer.produce(
-                topic,
-                key=str(event["visitor_id"]),
-                value=json.dumps(event),
-                callback=delivery_callback,
-            )
+            max_retries = 5
+            for retry in range(max_retries):
+                try:
+                    producer.produce(
+                        topic,
+                        key=str(event["visitor_id"]),
+                        value=json.dumps(event),
+                        callback=delivery_callback,
+                    )
+                    break  # Success
+                except BufferError:
+                    if retry == max_retries - 1:
+                        raise  # Re-raise on final retry
+                    # Queue full - poll to drain and wait before retry
+                    producer.poll(1.0)  # Blocking poll for up to 1 second
+                    time.sleep(0.1 * (retry + 1))  # Backoff: 0.1s, 0.2s, 0.3s, 0.4s
             events_sent += 1
 
             # Poll for delivery callbacks periodically (non-blocking)

@@ -291,64 +291,6 @@ def reset_consumer_group(group_id: str) -> tuple[bool, str]:
         return False, str(e)
 
 
-def get_consumer_lag(group_id: Optional[str] = None) -> Optional[int]:
-    """
-    Get the Kafka consumer lag (number of messages behind) for a consumer group.
-
-    Args:
-        group_id: Consumer group ID to check. If None, uses the default session consumer group.
-
-    Returns:
-        Number of messages the consumer is behind, or None if unavailable
-    """
-    try:
-        from kafka import KafkaConsumer, TopicPartition
-
-        settings = get_settings()
-        kafka_config = build_kafka_config(settings.kafka)
-
-        # Get end offsets (latest messages in topic)
-        consumer = KafkaConsumer(**kafka_config)
-        topic = settings.kafka.events_topic
-        partitions = consumer.partitions_for_topic(topic)
-
-        if not partitions:
-            consumer.close()
-            return None
-
-        topic_partitions = [TopicPartition(topic, p) for p in partitions]
-        end_offsets = consumer.end_offsets(topic_partitions)
-        consumer.close()
-
-        # Get committed offsets for consumer group
-        admin = get_admin_client()
-        effective_group_id = group_id if group_id else settings.postgresql_consumer.group_id
-
-        try:
-            offsets = admin.list_consumer_group_offsets(effective_group_id)
-        except Exception:
-            admin.close()
-            return None
-
-        admin.close()
-
-        # Calculate total lag
-        total_lag = 0
-        for tp, end_offset in end_offsets.items():
-            committed = offsets.get(tp)
-            if committed and committed.offset >= 0:
-                lag = end_offset - committed.offset
-                total_lag += max(0, lag)
-            else:
-                # No committed offset, assume lag is full partition
-                total_lag += end_offset
-
-        return total_lag
-
-    except Exception:
-        return None
-
-
 # ==============================================================================
 # Message Processing
 # ==============================================================================

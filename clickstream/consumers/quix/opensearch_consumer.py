@@ -3,6 +3,10 @@ OpenSearch consumer using Quix Streams.
 
 Consumes events from Kafka and indexes them to OpenSearch.
 Uses a separate consumer group for independent backfill capability.
+
+In benchmark mode (CONSUMER_BENCHMARK_MODE=true), the consumer uses
+app.run(timeout=3.0) to automatically exit 3 seconds after the last
+message is consumed, enabling accurate throughput measurements.
 """
 
 import logging
@@ -22,8 +26,13 @@ def run():
     1. Creates a Quix Application with separate consumer group
     2. Sets up OpenSearch sink
     3. Processes events and indexes to OpenSearch
+
+    In benchmark mode, uses app.run(timeout=3.0) to exit after 3 seconds
+    of no new messages, enabling accurate throughput measurements.
     """
     settings = get_settings()
+    benchmark_mode = settings.consumer.benchmark_mode
+    num_partitions = settings.kafka.events_topic_partitions
 
     # Use OpenSearch-specific consumer group for independent offset tracking
     consumer_group = settings.opensearch.consumer_group_id
@@ -31,20 +40,22 @@ def run():
     # Ensure topic exists before starting consumer (Quix throws if topic doesn't exist)
     ensure_topic_exists(
         settings.kafka.events_topic,
-        settings.kafka.events_topic_partitions,
+        num_partitions,
     )
 
     # Create Quix application
     app = create_application(
         consumer_group=consumer_group,
         auto_offset_reset="earliest",
+        benchmark_mode=benchmark_mode,
+        num_partitions=num_partitions,
     )
 
     # Create topic
     topic = create_topic(app, settings.kafka.events_topic)
 
     # Initialize sink
-    events_sink = OpenSearchEventSink(settings, group_id=consumer_group)
+    events_sink = OpenSearchEventSink(settings)
 
     # Build streaming dataframe
     sdf = app.dataframe(topic)
@@ -57,7 +68,11 @@ def run():
     logger.info("Topic: %s", settings.kafka.events_topic)
     logger.info("Index: %s", settings.opensearch.events_index)
 
-    app.run()
+    if benchmark_mode:
+        logger.info("Benchmark mode: will exit 3 seconds after last message")
+        app.run(timeout=3.0)
+    else:
+        app.run()
 
 
 if __name__ == "__main__":

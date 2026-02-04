@@ -3,8 +3,7 @@ Event Processor Transformer for PostgreSQL Consumer.
 
 This transformer:
 1. Updates session state in Valkey for each event
-2. Tracks last message timestamp for status display
-3. Returns events and sessions for downstream export to PostgreSQL
+2. Returns events and sessions for downstream export to PostgreSQL
 """
 
 from typing import Dict, List
@@ -53,7 +52,6 @@ def process_events(data: Dict, *args, **kwargs) -> Dict:
         Dict with 'events', 'sessions', and 'consumer' for downstream processing
     """
     from clickstream.utils.config import get_settings
-    from clickstream.utils.session_state import set_last_message_timestamp
 
     events = data.get("messages", [])
     consumer = data.get("consumer")
@@ -65,8 +63,6 @@ def process_events(data: Dict, *args, **kwargs) -> Dict:
             "consumer": consumer,
         }
 
-    settings = get_settings()
-    group_id = settings.postgresql_consumer.group_id
     session_state = _get_session_state()
 
     try:
@@ -75,9 +71,6 @@ def process_events(data: Dict, *args, **kwargs) -> Dict:
 
         # Convert sessions to database record format
         session_records = [session_state.to_db_record(s) for s in updated_sessions]
-
-        # Track activity for status display
-        set_last_message_timestamp(group_id)
 
         logger.debug(
             "Processed batch: %d events, %d sessions",

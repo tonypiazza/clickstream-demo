@@ -92,29 +92,12 @@ def _collect_consumer_data(settings: Any) -> dict[str, Any]:
     running_consumers = get_all_consumer_pids()
     num_running = len(running_consumers)
     pg_consumer_start_time = None
-    pg_consumer_lag = None
     pg_consumer_last_run = None
-    pg_consumer_last_message = None
     pg_group = settings.postgresql_consumer.group_id
 
     if num_running > 0:
         first_pid = running_consumers[0][1]
         pg_consumer_start_time = get_process_start_time(first_pid)
-
-        try:
-            from clickstream.utils.session_state import get_kafka_consumer_lag
-
-            pg_consumer_lag = get_kafka_consumer_lag(pg_group)
-
-            # Get last message timestamp when caught up
-            if pg_consumer_lag == 0:
-                from clickstream.utils.session_state import get_last_message_timestamp
-
-                last_msg_time = get_last_message_timestamp(pg_group)
-                if last_msg_time:
-                    pg_consumer_last_message = last_msg_time.strftime("%Y-%m-%d %H:%M:%S")
-        except Exception:
-            pass
     else:
         # Consumer is stopped - check for last run time from log files
         for i in range(4):
@@ -124,24 +107,13 @@ def _collect_consumer_data(settings: Any) -> dict[str, Any]:
                 if pg_consumer_last_run:
                     break
 
-        # Also get last message timestamp from Valkey (when consumer last processed a message)
-        try:
-            from clickstream.utils.session_state import get_last_message_timestamp
-
-            last_msg_time = get_last_message_timestamp(pg_group)
-            if last_msg_time:
-                pg_consumer_last_message = last_msg_time.strftime("%Y-%m-%d %H:%M:%S")
-        except Exception:
-            pass
-
     result["postgresql"] = {
         "running": num_running > 0,
         "instances": num_running,
+        "impl": settings.consumer.impl,
         "pids": [pid for _, pid in running_consumers],
         "start_time": pg_consumer_start_time,
         "last_run": pg_consumer_last_run,
-        "lag": pg_consumer_lag,
-        "last_message": pg_consumer_last_message,
     }
 
     # ── OpenSearch Consumer ──────────────────────────────
@@ -149,56 +121,27 @@ def _collect_consumer_data(settings: Any) -> dict[str, Any]:
     os_consumer_running = is_opensearch_consumer_running() if os_enabled else False
     os_consumer_pid = None
     os_consumer_start_time = None
-    os_consumer_lag = None
     os_consumer_last_run = None
-    os_consumer_last_message = None
 
     if os_enabled:
         instance = get_opensearch_instance()
         os_pid_file = get_consumer_pid_file(instance, "opensearch")
         os_log_file = get_consumer_log_file(instance, "opensearch")
-        os_group_id = settings.opensearch.consumer_group_id
 
         if os_consumer_running:
             os_consumer_pid = get_process_pid(os_pid_file)
             os_consumer_start_time = get_process_start_time(os_consumer_pid)
-
-            try:
-                from clickstream.utils.session_state import get_kafka_consumer_lag
-
-                os_consumer_lag = get_kafka_consumer_lag(os_group_id)
-
-                # Get last message timestamp when caught up
-                if os_consumer_lag == 0:
-                    from clickstream.utils.session_state import get_last_message_timestamp
-
-                    last_msg_time = get_last_message_timestamp(os_group_id)
-                    if last_msg_time:
-                        os_consumer_last_message = last_msg_time.strftime("%Y-%m-%d %H:%M:%S")
-            except Exception:
-                pass
         else:
             # Consumer is stopped - check for last run time from log files
             os_consumer_last_run = get_process_end_time(os_log_file)
 
-            # Also get last message timestamp from Valkey
-            try:
-                from clickstream.utils.session_state import get_last_message_timestamp
-
-                last_msg_time = get_last_message_timestamp(os_group_id)
-                if last_msg_time:
-                    os_consumer_last_message = last_msg_time.strftime("%Y-%m-%d %H:%M:%S")
-            except Exception:
-                pass
-
     result["opensearch"] = {
         "enabled": os_enabled,
         "running": os_consumer_running,
+        "impl": settings.consumer.impl,
         "pid": os_consumer_pid,
         "start_time": os_consumer_start_time,
         "last_run": os_consumer_last_run,
-        "lag": os_consumer_lag,
-        "last_message": os_consumer_last_message,
     }
 
     return result
@@ -713,29 +656,11 @@ def _collect_status_data() -> dict[str, Any]:
     running_consumers = get_all_consumer_pids()
     num_running = len(running_consumers)
     pg_consumer_start_time = None
-    pg_consumer_lag = None
     pg_consumer_last_run = None
-    pg_consumer_last_message = None
 
     if num_running > 0:
         first_pid = running_consumers[0][1]
         pg_consumer_start_time = get_process_start_time(first_pid)
-
-        try:
-            from clickstream.utils.session_state import get_kafka_consumer_lag
-
-            pg_group = settings.postgresql_consumer.group_id
-            pg_consumer_lag = get_kafka_consumer_lag(pg_group)
-
-            # Get last message timestamp when caught up
-            if pg_consumer_lag == 0:
-                from clickstream.utils.session_state import get_last_message_timestamp
-
-                last_msg_time = get_last_message_timestamp(pg_group)
-                if last_msg_time:
-                    pg_consumer_last_message = last_msg_time.strftime("%Y-%m-%d %H:%M:%S")
-        except Exception:
-            pass
     else:
         # Check for last run time
         for i in range(4):
@@ -751,8 +676,6 @@ def _collect_status_data() -> dict[str, Any]:
         "pids": [pid for _, pid in running_consumers],
         "start_time": pg_consumer_start_time,
         "last_run": pg_consumer_last_run,
-        "lag": pg_consumer_lag,
-        "last_message": pg_consumer_last_message,
     }
 
     # ── OpenSearch Consumer ──────────────────────────────
@@ -760,9 +683,7 @@ def _collect_status_data() -> dict[str, Any]:
     os_consumer_running = is_opensearch_consumer_running() if os_enabled else False
     os_consumer_pid = None
     os_consumer_start_time = None
-    os_consumer_lag = None
     os_consumer_last_run = None
-    os_consumer_last_message = None
 
     if os_enabled:
         instance = get_opensearch_instance()
@@ -772,23 +693,6 @@ def _collect_status_data() -> dict[str, Any]:
         if os_consumer_running:
             os_consumer_pid = get_process_pid(os_pid_file)
             os_consumer_start_time = get_process_start_time(os_consumer_pid)
-
-            try:
-                from clickstream.utils.session_state import get_kafka_consumer_lag
-
-                os_consumer_lag = get_kafka_consumer_lag(settings.opensearch.consumer_group_id)
-
-                # Get last message timestamp when caught up
-                if os_consumer_lag == 0:
-                    from clickstream.utils.session_state import get_last_message_timestamp
-
-                    last_msg_time = get_last_message_timestamp(
-                        settings.opensearch.consumer_group_id
-                    )
-                    if last_msg_time:
-                        os_consumer_last_message = last_msg_time.strftime("%Y-%m-%d %H:%M:%S")
-            except Exception:
-                pass
         else:
             os_consumer_last_run = get_process_end_time(os_log_file)
 
@@ -798,8 +702,6 @@ def _collect_status_data() -> dict[str, Any]:
         "pid": os_consumer_pid,
         "start_time": os_consumer_start_time,
         "last_run": os_consumer_last_run,
-        "lag": os_consumer_lag,
-        "last_message": os_consumer_last_message,
     }
 
     # ── Kafka Service ──────────────────────────────────────
@@ -1005,6 +907,19 @@ def _collect_status_data() -> dict[str, Any]:
 # ==============================================================================
 
 
+def _print_aligned_fields(fields: list[tuple[str, str, str]], width: int) -> None:
+    """Print fields with aligned labels.
+
+    Args:
+        fields: List of (label, value, color) tuples
+        width: Box width for _box_line
+    """
+    max_label = max(len(label) for label, _, _ in fields)
+    for label, value, color in fields:
+        padded_label = f"{label}:".ljust(max_label + 1)
+        print(_box_line(f"    {padded_label} {color}{value}{C.RESET}", width))
+
+
 def _display_status(data: dict[str, Any]) -> None:
     """Display status in formatted box output."""
     settings = get_settings()
@@ -1048,19 +963,13 @@ def _display_status(data: dict[str, Any]) -> None:
         num = pg_consumer["instances"]
         status_text = f"Running ({num} instance{'s' if num > 1 else ''})"
         print(_box_line(f"  {C.BRIGHT_GREEN}{I.CHECK}{C.RESET} PostgreSQL: {status_text}", W))
-        pids_str = ", ".join(str(p) for p in pg_consumer["pids"])
-        print(_box_line(f"    PIDs:  {C.WHITE}{pids_str}{C.RESET}", W))
+        fields = [
+            ("Impl", pg_consumer["impl"], C.WHITE),
+            ("PIDs", ", ".join(str(p) for p in pg_consumer["pids"]), C.WHITE),
+        ]
         if pg_consumer["start_time"]:
-            print(_box_line(f"    Since: {C.DIM}{pg_consumer['start_time']}{C.RESET}", W))
-        if pg_consumer["lag"] is not None:
-            if pg_consumer["lag"] == 0:
-                if pg_consumer.get("last_message"):
-                    lag_str = f"0 messages (last @ {pg_consumer['last_message']})"
-                else:
-                    lag_str = "0 messages"
-            else:
-                lag_str = f"{pg_consumer['lag']:,} messages"
-            print(_box_line(f"    Lag:   {C.WHITE}{lag_str}{C.RESET}", W))
+            fields.append(("Since", pg_consumer["start_time"], C.DIM))
+        _print_aligned_fields(fields, W)
     else:
         print(_box_line(f"  {C.DIM}{I.STOP}{C.RESET} PostgreSQL: Not running", W))
         if pg_consumer["last_run"]:
@@ -1072,18 +981,13 @@ def _display_status(data: dict[str, Any]) -> None:
         print(_empty_line(W))
         if os_consumer["running"]:
             print(_box_line(f"  {C.BRIGHT_GREEN}{I.CHECK}{C.RESET} OpenSearch: Running", W))
-            print(_box_line(f"    PID:   {C.WHITE}{os_consumer['pid']}{C.RESET}", W))
+            fields = [
+                ("Impl", os_consumer["impl"], C.WHITE),
+                ("PID", str(os_consumer["pid"]), C.WHITE),
+            ]
             if os_consumer["start_time"]:
-                print(_box_line(f"    Since: {C.DIM}{os_consumer['start_time']}{C.RESET}", W))
-            if os_consumer["lag"] is not None:
-                if os_consumer["lag"] == 0:
-                    if os_consumer.get("last_message"):
-                        lag_str = f"0 messages (last @ {os_consumer['last_message']})"
-                    else:
-                        lag_str = "0 messages"
-                else:
-                    lag_str = f"{os_consumer['lag']:,} messages"
-                print(_box_line(f"    Lag:   {C.WHITE}{lag_str}{C.RESET}", W))
+                fields.append(("Since", os_consumer["start_time"], C.DIM))
+            _print_aligned_fields(fields, W)
         else:
             print(_box_line(f"  {C.DIM}{I.STOP}{C.RESET} OpenSearch: Not running", W))
             if os_consumer["last_run"]:

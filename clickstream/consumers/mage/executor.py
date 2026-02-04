@@ -41,12 +41,13 @@ def get_mage_project_path() -> str:
     return str(get_project_root() / "clickstream" / "consumers" / "mage")
 
 
-def _build_consumer_config(group_id: str) -> dict:
+def _build_consumer_config(group_id: str, benchmark_mode: bool = False) -> dict:
     """
     Build confluent-kafka consumer configuration.
 
     Args:
         group_id: Consumer group ID
+        benchmark_mode: If True, enable partition EOF detection
 
     Returns:
         Dict with confluent-kafka consumer configuration
@@ -72,6 +73,10 @@ def _build_consumer_config(group_id: str) -> dict:
         "heartbeat.interval.ms": 15000,
         "max.poll.interval.ms": 300000,
     }
+
+    # Enable partition EOF detection for benchmark mode
+    if benchmark_mode:
+        config["enable.partition.eof"] = True
 
     # Add SSL config if using SSL protocol
     if kafka_settings.security_protocol == "SSL":
@@ -151,18 +156,78 @@ def _run_postgresql_consumer(settings) -> None:
     from clickstream.utils.session_state import (
         SessionState,
         get_valkey_client,
-        set_last_message_timestamp,
     )
 
     group_id = settings.postgresql_consumer.group_id
     topic = settings.kafka.events_topic
     batch_size = settings.consumer.batch_size
     poll_timeout = settings.consumer.poll_timeout_ms / 1000.0
+    benchmark_mode = settings.consumer.benchmark_mode
 
     # Build consumer config
-    config = _build_consumer_config(group_id)
+    config = _build_consumer_config(group_id, benchmark_mode=benchmark_mode)
     consumer = Consumer(config)
-    consumer.subscribe([topic])
+
+    # Track EOF and assigned partitions for benchmark mode
+    eof_partitions: set[tuple[str, int]] = set()
+    assigned_partitions: set[tuple[str, int]] = set()
+
+    def _check_partitions_at_eof(consumer, partitions):
+        """
+        Check if any newly assigned partitions are already at EOF.
+
+        After a rebalance, partitions that were previously at EOF won't re-report
+        _PARTITION_EOF since there's no new data. We need to check their committed
+        offset against the high watermark to detect this.
+
+        Note: We use committed() instead of position() because position() returns
+        an invalid offset immediately after assignment (before the consumer has
+        seeked to the stored offset).
+        """
+        nonlocal eof_partitions
+        for p in partitions:
+            try:
+                # Get high watermark (end offset) for this partition
+                low, high = consumer.get_watermark_offsets(p, timeout=5.0)
+                # Get committed offset (available immediately after assignment)
+                committed = consumer.committed([p], timeout=5.0)
+                if committed and committed[0].offset >= 0:
+                    committed_offset = committed[0].offset
+                    if committed_offset >= high:
+                        # Already at EOF
+                        eof_partitions.add((p.topic, p.partition))
+                        logger.info(
+                            "Partition %s-%d already at EOF (committed=%d, high=%d) (%d/%d assigned)",
+                            p.topic,
+                            p.partition,
+                            committed_offset,
+                            high,
+                            len(eof_partitions),
+                            len(assigned_partitions),
+                        )
+            except Exception as e:
+                logger.debug("Could not check EOF for %s-%d: %s", p.topic, p.partition, e)
+
+    def on_assign(consumer, partitions):
+        nonlocal assigned_partitions
+        assigned_partitions = {(p.topic, p.partition) for p in partitions}
+        logger.info(
+            "Assigned %d partitions: %s",
+            len(partitions),
+            [f"{p.topic}-{p.partition}" for p in partitions],
+        )
+        # In benchmark mode, check if any reassigned partitions are already at EOF
+        if benchmark_mode and partitions:
+            _check_partitions_at_eof(consumer, partitions)
+
+    def on_revoke(consumer, partitions):
+        nonlocal assigned_partitions, eof_partitions
+        revoked = {(p.topic, p.partition) for p in partitions}
+        assigned_partitions -= revoked
+        eof_partitions -= revoked
+        logger.info("Revoked %d partitions", len(partitions))
+
+    consumer.subscribe([topic], on_assign=on_assign, on_revoke=on_revoke)
 
     # Initialize repositories
     event_repo = PostgreSQLEventRepository(settings)
@@ -182,6 +247,8 @@ def _run_postgresql_consumer(settings) -> None:
     logger.info("Starting PostgreSQL consumer (Mage AI)...")
     logger.info("Consumer group: %s", group_id)
     logger.info("Topic: %s", topic)
+    if benchmark_mode:
+        logger.info("Benchmark mode: will exit when all assigned partitions reach EOF")
 
     try:
         while not _shutdown_requested:
@@ -192,6 +259,13 @@ def _run_postgresql_consumer(settings) -> None:
             )
 
             if not messages:
+                # Check if all assigned partitions have reached EOF
+                if benchmark_mode and assigned_partitions and eof_partitions >= assigned_partitions:
+                    logger.info(
+                        "All %d assigned partitions reached EOF, exiting benchmark mode",
+                        len(assigned_partitions),
+                    )
+                    break
                 continue
 
             # Parse messages
@@ -200,6 +274,16 @@ def _run_postgresql_consumer(settings) -> None:
                 if msg.error():
                     error = msg.error()
                     if error.code() == KafkaError._PARTITION_EOF:
+                        # Track EOF partition
+                        if benchmark_mode:
+                            eof_partitions.add((msg.topic(), msg.partition()))
+                            logger.info(
+                                "Partition %s-%d reached EOF (%d/%d assigned)",
+                                msg.topic(),
+                                msg.partition(),
+                                len(eof_partitions),
+                                len(assigned_partitions),
+                            )
                         continue
                     else:
                         logger.error("Consumer error: %s", error)
@@ -213,6 +297,13 @@ def _run_postgresql_consumer(settings) -> None:
                     continue
 
             if not events:
+                # Check if all assigned partitions have reached EOF after processing messages
+                if benchmark_mode and assigned_partitions and eof_partitions >= assigned_partitions:
+                    logger.info(
+                        "All %d assigned partitions reached EOF, exiting benchmark mode",
+                        len(assigned_partitions),
+                    )
+                    break
                 continue
 
             try:
@@ -226,10 +317,7 @@ def _run_postgresql_consumer(settings) -> None:
                 session_records = [session_state.to_db_record(s) for s in updated_sessions]
                 session_repo.save(session_records)
 
-                # 4. Track activity for status display
-                set_last_message_timestamp(group_id)
-
-                # 5. Commit offsets
+                # 4. Commit offsets
                 consumer.commit()
 
                 logger.debug(
@@ -264,17 +352,77 @@ def _run_opensearch_consumer(settings) -> None:
 
     from confluent_kafka import Consumer, KafkaError
     from clickstream.infrastructure.search.opensearch import OpenSearchRepository
-    from clickstream.utils.session_state import set_last_message_timestamp
 
     group_id = settings.opensearch.consumer_group_id
     topic = settings.kafka.events_topic
     batch_size = settings.consumer.batch_size
     poll_timeout = settings.consumer.poll_timeout_ms / 1000.0
+    benchmark_mode = settings.consumer.benchmark_mode
 
     # Build consumer config
-    config = _build_consumer_config(group_id)
+    config = _build_consumer_config(group_id, benchmark_mode=benchmark_mode)
     consumer = Consumer(config)
-    consumer.subscribe([topic])
+
+    # Track EOF and assigned partitions for benchmark mode
+    eof_partitions: set[tuple[str, int]] = set()
+    assigned_partitions: set[tuple[str, int]] = set()
+
+    def _check_partitions_at_eof(consumer, partitions):
+        """
+        Check if any newly assigned partitions are already at EOF.
+
+        After a rebalance, partitions that were previously at EOF won't re-report
+        _PARTITION_EOF since there's no new data. We need to check their committed
+        offset against the high watermark to detect this.
+
+        Note: We use committed() instead of position() because position() returns
+        an invalid offset immediately after assignment (before the consumer has
+        seeked to the stored offset).
+        """
+        nonlocal eof_partitions
+        for p in partitions:
+            try:
+                # Get high watermark (end offset) for this partition
+                low, high = consumer.get_watermark_offsets(p, timeout=5.0)
+                # Get committed offset (available immediately after assignment)
+                committed = consumer.committed([p], timeout=5.0)
+                if committed and committed[0].offset >= 0:
+                    committed_offset = committed[0].offset
+                    if committed_offset >= high:
+                        # Already at EOF
+                        eof_partitions.add((p.topic, p.partition))
+                        logger.info(
+                            "Partition %s-%d already at EOF (committed=%d, high=%d) (%d/%d assigned)",
+                            p.topic,
+                            p.partition,
+                            committed_offset,
+                            high,
+                            len(eof_partitions),
+                            len(assigned_partitions),
+                        )
+            except Exception as e:
+                logger.debug("Could not check EOF for %s-%d: %s", p.topic, p.partition, e)
+
+    def on_assign(consumer, partitions):
+        nonlocal assigned_partitions
+        assigned_partitions = {(p.topic, p.partition) for p in partitions}
+        logger.info(
+            "Assigned %d partitions: %s",
+            len(partitions),
+            [f"{p.topic}-{p.partition}" for p in partitions],
+        )
+        # In benchmark mode, check if any reassigned partitions are already at EOF
+        if benchmark_mode and partitions:
+            _check_partitions_at_eof(consumer, partitions)
+
+    def on_revoke(consumer, partitions):
+        nonlocal assigned_partitions, eof_partitions
+        revoked = {(p.topic, p.partition) for p in partitions}
+        assigned_partitions -= revoked
+        eof_partitions -= revoked
+        logger.info("Revoked %d partitions", len(partitions))
+
+    consumer.subscribe([topic], on_assign=on_assign, on_revoke=on_revoke)
 
     # Initialize OpenSearch repository
     opensearch_repo = OpenSearchRepository(settings)
@@ -284,6 +432,8 @@ def _run_opensearch_consumer(settings) -> None:
     logger.info("Consumer group: %s", group_id)
     logger.info("Topic: %s", topic)
     logger.info("Index: %s", settings.opensearch.events_index)
+    if benchmark_mode:
+        logger.info("Benchmark mode: will exit when all assigned partitions reach EOF")
 
     try:
         while not _shutdown_requested:
@@ -294,6 +444,13 @@ def _run_opensearch_consumer(settings) -> None:
             )
 
             if not messages:
+                # Check if all assigned partitions have reached EOF
+                if benchmark_mode and assigned_partitions and eof_partitions >= assigned_partitions:
+                    logger.info(
+                        "All %d assigned partitions reached EOF, exiting benchmark mode",
+                        len(assigned_partitions),
+                    )
+                    break
                 continue
 
             # Parse messages
@@ -302,6 +459,16 @@ def _run_opensearch_consumer(settings) -> None:
                 if msg.error():
                     error = msg.error()
                     if error.code() == KafkaError._PARTITION_EOF:
+                        # Track EOF partition
+                        if benchmark_mode:
+                            eof_partitions.add((msg.topic(), msg.partition()))
+                            logger.info(
+                                "Partition %s-%d reached EOF (%d/%d assigned)",
+                                msg.topic(),
+                                msg.partition(),
+                                len(eof_partitions),
+                                len(assigned_partitions),
+                            )
                         continue
                     else:
                         logger.error("Consumer error: %s", error)
@@ -315,14 +482,18 @@ def _run_opensearch_consumer(settings) -> None:
                     continue
 
             if not events:
+                # Check if all assigned partitions have reached EOF after processing messages
+                if benchmark_mode and assigned_partitions and eof_partitions >= assigned_partitions:
+                    logger.info(
+                        "All %d assigned partitions reached EOF, exiting benchmark mode",
+                        len(assigned_partitions),
+                    )
+                    break
                 continue
 
             try:
                 # Index to OpenSearch
                 opensearch_repo.save(events)
-
-                # Track activity for status display
-                set_last_message_timestamp(group_id)
 
                 # Commit offsets
                 consumer.commit()

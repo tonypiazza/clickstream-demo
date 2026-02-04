@@ -17,7 +17,6 @@ import psycopg2
 from psycopg2 import errors as pg_errors
 from bytewax.outputs import DynamicSink, StatelessSinkPartition
 
-from clickstream.infrastructure.metrics import set_last_message_timestamp
 from clickstream.infrastructure.repositories import (
     PostgreSQLEventRepository,
     PostgreSQLSessionRepository,
@@ -42,17 +41,15 @@ class PostgreSQLEventPartition(StatelessSinkPartition):
     error recovery.
     """
 
-    def __init__(self, settings: Settings, group_id: str):
+    def __init__(self, settings: Settings):
         """
         Initialize the partition.
 
         Args:
             settings: Application settings
-            group_id: Consumer group ID for metrics tracking
         """
         self._repo = PostgreSQLEventRepository(settings)
         self._repo.connect()
-        self._group_id = group_id
 
     def write_batch(self, items: List[dict]) -> None:
         """
@@ -66,9 +63,6 @@ class PostgreSQLEventPartition(StatelessSinkPartition):
 
         try:
             self._repo.save(items)
-
-            if self._group_id:
-                set_last_message_timestamp(self._group_id)
 
         except psycopg2.OperationalError as e:
             logger.warning("Connection error, reconnecting: %s", e)
@@ -95,16 +89,14 @@ class PostgreSQLEventSink(DynamicSink):
     for each worker.
     """
 
-    def __init__(self, settings: Optional[Settings] = None, group_id: str = ""):
+    def __init__(self, settings: Optional[Settings] = None):
         """
         Initialize the sink.
 
         Args:
             settings: Application settings. If None, uses get_settings().
-            group_id: Consumer group ID for metrics tracking
         """
         self._settings = settings or get_settings()
-        self._group_id = group_id
 
     def build(self, step_id: str, worker_index: int, worker_count: int) -> StatelessSinkPartition:
         """
@@ -118,7 +110,7 @@ class PostgreSQLEventSink(DynamicSink):
         Returns:
             PostgreSQLEventPartition instance
         """
-        return PostgreSQLEventPartition(self._settings, self._group_id)
+        return PostgreSQLEventPartition(self._settings)
 
 
 class PostgreSQLSessionPartition(StatelessSinkPartition):
@@ -278,26 +270,23 @@ class PostgreSQLPartition(StatelessSinkPartition):
     1. Save events to PostgreSQL
     2. Batch update sessions in Valkey
     3. Save sessions to PostgreSQL
-    4. Track activity timestamp
 
     This eliminates the dual-sink overhead that caused poor performance.
     """
 
-    def __init__(self, settings: Settings, session_state: "SessionState", group_id: str):
+    def __init__(self, settings: Settings, session_state: "SessionState"):
         """
         Initialize the partition.
 
         Args:
             settings: Application settings
             session_state: SessionState instance for Valkey operations
-            group_id: Consumer group ID for metrics tracking
         """
         self._event_repo = PostgreSQLEventRepository(settings)
         self._event_repo.connect()
         self._session_repo = PostgreSQLSessionRepository(settings)
         self._session_repo.connect()
         self._session_state = session_state
-        self._group_id = group_id
 
     def write_batch(self, items: List[dict]) -> None:
         """
@@ -323,10 +312,6 @@ class PostgreSQLPartition(StatelessSinkPartition):
             if updated_sessions:
                 session_records = [self._session_state.to_db_record(s) for s in updated_sessions]
                 self._save_sessions_with_retry(session_records)
-
-            # 4. Track activity for status display
-            if self._group_id:
-                set_last_message_timestamp(self._group_id)
 
         except psycopg2.OperationalError as e:
             logger.warning("Connection error, reconnecting: %s", e)
@@ -398,8 +383,6 @@ class PostgreSQLPartition(StatelessSinkPartition):
             if updated_sessions:
                 session_records = [self._session_state.to_db_record(s) for s in updated_sessions]
                 self._session_repo.save(session_records)
-            if self._group_id:
-                set_last_message_timestamp(self._group_id)
         except Exception as e:
             logger.error("Failed to process batch after reconnect: %s", e)
             self._event_repo.rollback()
@@ -427,7 +410,6 @@ class PostgreSQLSink(DynamicSink):
         self,
         settings: Optional[Settings] = None,
         session_state: Optional["SessionState"] = None,
-        group_id: str = "",
     ):
         """
         Initialize the sink.
@@ -435,11 +417,9 @@ class PostgreSQLSink(DynamicSink):
         Args:
             settings: Application settings. If None, uses get_settings().
             session_state: SessionState instance for Valkey operations
-            group_id: Consumer group ID for metrics tracking
         """
         self._settings = settings or get_settings()
         self._session_state = session_state
-        self._group_id = group_id
 
     def build(self, step_id: str, worker_index: int, worker_count: int) -> StatelessSinkPartition:
         """
@@ -458,4 +438,4 @@ class PostgreSQLSink(DynamicSink):
         """
         if self._session_state is None:
             raise RuntimeError("SessionState not configured")
-        return PostgreSQLPartition(self._settings, self._session_state, self._group_id)
+        return PostgreSQLPartition(self._settings, self._session_state)

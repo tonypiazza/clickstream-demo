@@ -3,6 +3,10 @@ PostgreSQL consumer using Quix Streams.
 
 Consumes events from Kafka, updates session state in Valkey,
 and writes events + sessions to PostgreSQL.
+
+In benchmark mode (CONSUMER_BENCHMARK_MODE=true), the consumer uses
+app.run(timeout=3.0) to automatically exit 3 seconds after the last
+message is consumed, enabling accurate throughput measurements.
 """
 
 import logging
@@ -34,15 +38,19 @@ def run():
       2. Batch updates sessions in Valkey (2 round-trips per batch)
       3. Upserts sessions to PostgreSQL
 
-    This single-sink pattern ensures reliable checkpoint/offset commits,
-    fixing the lag tracking issues caused by the previous dual-sink approach.
+    This single-sink pattern ensures reliable checkpoint/offset commits.
+
+    In benchmark mode, uses app.run(timeout=3.0) to exit after 3 seconds
+    of no new messages, enabling accurate throughput measurements.
     """
     settings = get_settings()
+    benchmark_mode = settings.consumer.benchmark_mode
+    num_partitions = settings.kafka.events_topic_partitions
 
     # Ensure topic exists before starting consumer (Quix throws if topic doesn't exist)
     ensure_topic_exists(
         settings.kafka.events_topic,
-        settings.kafka.events_topic_partitions,
+        num_partitions,
     )
 
     # Consumer group for PostgreSQL pipeline (separate from OpenSearch consumer)
@@ -52,6 +60,8 @@ def run():
     app = create_application(
         consumer_group=consumer_group,
         auto_offset_reset="earliest",
+        benchmark_mode=benchmark_mode,
+        num_partitions=num_partitions,
     )
 
     # Create topic
@@ -69,21 +79,23 @@ def run():
     sink = PostgreSQLSink(
         settings=settings,
         session_state=session_state,
-        group_id=consumer_group,
     )
 
     # Build streaming dataframe
     sdf = app.dataframe(topic)
 
     # Single sink handles both events and sessions in one write() call
-    # This fixes checkpoint/commit issues that caused lag tracking problems
     sdf.sink(sink)
 
     logger.info("Starting PostgreSQL consumer (Quix Streams)...")
     logger.info("Consumer group: %s", consumer_group)
     logger.info("Topic: %s", settings.kafka.events_topic)
 
-    app.run()
+    if benchmark_mode:
+        logger.info("Benchmark mode: will exit 3 seconds after last message")
+        app.run(timeout=3.0)
+    else:
+        app.run()
 
 
 if __name__ == "__main__":

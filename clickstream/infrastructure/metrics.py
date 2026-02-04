@@ -7,8 +7,6 @@ Pipeline metrics tracking and monitoring.
 This module provides:
 - Producer message counters
 - Throughput stats tracking (events/sec)
-- Consumer lag monitoring
-- Last message timestamp tracking
 
 All metrics are stored in Valkey/Redis with appropriate TTLs.
 """
@@ -16,11 +14,9 @@ All metrics are stored in Valkey/Redis with appropriate TTLs.
 import json
 import logging
 import time
-from datetime import datetime, timezone
 from typing import Optional
 
 from clickstream.infrastructure.cache import ValkeyCache
-from clickstream.utils.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +28,6 @@ logger = logging.getLogger(__name__)
 PRODUCER_MESSAGES_KEY = "producer:messages_produced"
 STATS_SAMPLES_KEY_PREFIX = "clickstream:stats:samples:"
 STATS_TTL_SECONDS = 3600  # 1 hour
-LAST_MESSAGE_TS_PREFIX = "consumer:last_message_ts:"
-LAST_MESSAGE_TS_TTL_SECONDS = 86400  # 24 hours
 
 
 class PipelineMetrics:
@@ -43,8 +37,6 @@ class PipelineMetrics:
     Tracks:
     - Producer message counts
     - Consumer throughput (events/sec)
-    - Consumer lag
-    - Last message timestamps
     """
 
     def __init__(self, cache: ValkeyCache | None = None):
@@ -188,44 +180,6 @@ class PipelineMetrics:
             "samples_count": len(samples),
         }
 
-    # ==========================================================================
-    # Last Message Timestamp Tracking
-    # ==========================================================================
-
-    def set_last_message_timestamp(self, group_id: str) -> None:
-        """
-        Store the current time as the last message processed timestamp.
-
-        Args:
-            group_id: Consumer group ID to store timestamp for
-        """
-        key = f"{LAST_MESSAGE_TS_PREFIX}{group_id}"
-        self.client.set(key, datetime.now(timezone.utc).isoformat())
-        self.client.expire(key, LAST_MESSAGE_TS_TTL_SECONDS)
-
-    def get_last_message_timestamp(self, group_id: Optional[str] = None) -> Optional[datetime]:
-        """
-        Get the timestamp of the last processed message for a consumer group.
-
-        Args:
-            group_id: Consumer group ID to check. If None, uses the default consumer group.
-
-        Returns:
-            datetime of last message processed (in local time), or None if unavailable
-        """
-        try:
-            settings = get_settings()
-            effective_group_id = group_id if group_id else settings.postgresql_consumer.group_id
-            key = f"{LAST_MESSAGE_TS_PREFIX}{effective_group_id}"
-            value = self.client.get(key)
-            if value:
-                # Parse UTC timestamp and convert to local time
-                utc_time = datetime.fromisoformat(value)
-                return utc_time.replace(tzinfo=timezone.utc).astimezone()
-            return None
-        except Exception:
-            return None
-
 
 # ==============================================================================
 # Module-level convenience functions (for backward compatibility)
@@ -265,13 +219,3 @@ def record_stats_sample(source: str, count: int, count2: Optional[int] = None) -
 def get_throughput_stats(source: str) -> dict:
     """Calculate throughput stats."""
     return _get_metrics().get_throughput_stats(source)
-
-
-def set_last_message_timestamp(group_id: str) -> None:
-    """Store the last message processed timestamp."""
-    _get_metrics().set_last_message_timestamp(group_id)
-
-
-def get_last_message_timestamp(group_id: Optional[str] = None) -> Optional[datetime]:
-    """Get the last message processed timestamp."""
-    return _get_metrics().get_last_message_timestamp(group_id)

@@ -20,7 +20,6 @@ import signal
 from clickstream.infrastructure.kafka import build_kafka_config
 from clickstream.infrastructure.search.opensearch import OpenSearchRepository
 from clickstream.utils.config import get_settings
-from clickstream.utils.session_state import set_last_message_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +34,37 @@ def _signal_handler(signum, frame):
     _shutdown_requested = True
 
 
+def _check_all_partitions_at_end(consumer) -> bool:
+    """
+    Check if all assigned partitions have been fully consumed.
+
+    Compares current position to end offsets (high watermarks) for each
+    partition assigned to this consumer instance.
+
+    Args:
+        consumer: KafkaConsumer instance
+
+    Returns:
+        True if all assigned partitions are at the end
+    """
+    assigned = consumer.assignment()
+    if not assigned:
+        return False
+
+    # Get end offsets for all assigned partitions
+    end_offsets = consumer.end_offsets(assigned)
+
+    for tp in assigned:
+        current_position = consumer.position(tp)
+        end_offset = end_offsets.get(tp, 0)
+
+        # If current position is less than end offset, not done yet
+        if current_position < end_offset:
+            return False
+
+    return True
+
+
 def run() -> None:
     """
     Run the OpenSearch consumer using kafka-python.
@@ -44,8 +74,10 @@ def run() -> None:
     2. Initializes OpenSearch repository
     3. Processes events in batches:
        - Indexes events to OpenSearch
-       - Tracks activity timestamp for status display
        - Commits offsets
+
+    In benchmark mode (CONSUMER_BENCHMARK_MODE=true), the consumer exits
+    when all assigned partitions have been fully consumed.
     """
     global _shutdown_requested
     _shutdown_requested = False
@@ -59,11 +91,14 @@ def run() -> None:
     settings = get_settings()
     consumer_settings = settings.consumer
     group_id = settings.opensearch.consumer_group_id
+    topic = settings.kafka.events_topic
+    benchmark_mode = consumer_settings.benchmark_mode
+    num_partitions = settings.kafka.events_topic_partitions
 
     # Build Kafka consumer config
     kafka_config = build_kafka_config(settings.kafka)
     consumer = KafkaConsumer(
-        settings.kafka.events_topic,
+        topic,
         **kafka_config,
         group_id=group_id,
         auto_offset_reset=consumer_settings.auto_offset_reset,
@@ -75,10 +110,18 @@ def run() -> None:
     opensearch_repo = OpenSearchRepository(settings)
     opensearch_repo.connect()
 
+    # Track consecutive empty polls for benchmark mode EOF detection
+    empty_poll_count = 0
+    max_empty_polls = 3  # Exit after 3 consecutive empty polls when at EOF
+
     logger.info("Starting OpenSearch consumer (kafka-python)...")
     logger.info("Consumer group: %s", group_id)
-    logger.info("Topic: %s", settings.kafka.events_topic)
+    logger.info("Topic: %s", topic)
     logger.info("Index: %s", settings.opensearch.events_index)
+    if benchmark_mode:
+        logger.info(
+            "Benchmark mode: will exit when all %d partitions are fully consumed", num_partitions
+        )
 
     try:
         while not _shutdown_requested:
@@ -89,7 +132,19 @@ def run() -> None:
             )
 
             if not raw_messages:
+                # In benchmark mode, check if we've consumed everything
+                if benchmark_mode:
+                    empty_poll_count += 1
+                    if empty_poll_count >= max_empty_polls:
+                        if _check_all_partitions_at_end(consumer):
+                            logger.info("All partitions fully consumed, exiting benchmark mode")
+                            break
+                        # Reset counter if not actually at end
+                        empty_poll_count = 0
                 continue
+
+            # Reset empty poll counter on successful poll
+            empty_poll_count = 0
 
             # Flatten partition messages into event list
             events = []
@@ -103,9 +158,6 @@ def run() -> None:
             try:
                 # Index to OpenSearch
                 opensearch_repo.save(events)
-
-                # Track activity for status display
-                set_last_message_timestamp(group_id)
 
                 # Commit offsets
                 consumer.commit()

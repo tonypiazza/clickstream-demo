@@ -41,8 +41,12 @@ def run():
     The data flow is:
     - Events arrive from Kafka
     - Unified sink: writes events to PostgreSQL, updates Valkey, upserts sessions
+
+    In benchmark mode (CONSUMER_BENCHMARK_MODE=true), the consumer exits
+    when all assigned partitions have been fully consumed (tail=False).
     """
     settings = get_settings()
+    benchmark_mode = settings.consumer.benchmark_mode
 
     # Ensure topic exists before starting consumer
     ensure_topic_exists(
@@ -68,13 +72,14 @@ def run():
     flow = Dataflow("postgresql_consumer")
 
     # Kafka input with custom source that commits offsets explicitly
-    # This ensures accurate lag tracking for monitoring and benchmarks
+    # In benchmark mode, tail=False causes the source to exit at EOF
     source = KafkaSourceWithCommit(
         brokers=brokers,
         topics=[settings.kafka.events_topic],
         add_config=add_config,
         batch_size=5000,
         starting_offset=OFFSET_STORED,
+        tail=not benchmark_mode,  # tail=False means exit at EOF
     )
     kinp = op.input("kafka_in", flow, source)
 
@@ -90,13 +95,14 @@ def run():
     unified_sink = PostgreSQLSink(
         settings,
         session_state=session_state,
-        group_id=consumer_group,
     )
     op.output("postgresql_out", events, unified_sink)
 
     logger.info("Starting PostgreSQL consumer (Bytewax)...")
     logger.info("Consumer group: %s", consumer_group)
     logger.info("Topic: %s", settings.kafka.events_topic)
+    if benchmark_mode:
+        logger.info("Benchmark mode: will exit when all partitions are fully consumed")
 
     # Run dataflow with workers matching partition count
     # Bytewax distributes partitions round-robin across workers:

@@ -15,7 +15,6 @@ from bytewax.outputs import DynamicSink, StatelessSinkPartition
 from opensearchpy.exceptions import ConnectionError as OSConnectionError
 from opensearchpy.exceptions import ConnectionTimeout
 
-from clickstream.infrastructure.metrics import set_last_message_timestamp
 from clickstream.infrastructure.search import OpenSearchRepository
 from clickstream.utils.config import Settings, get_settings
 
@@ -30,17 +29,15 @@ class OpenSearchEventPartition(StatelessSinkPartition):
     error recovery.
     """
 
-    def __init__(self, settings: Settings, group_id: str):
+    def __init__(self, settings: Settings):
         """
         Initialize the partition.
 
         Args:
             settings: Application settings
-            group_id: Consumer group ID for metrics tracking
         """
         self._repo = OpenSearchRepository(settings)
         self._repo.connect()
-        self._group_id = group_id
 
     def write_batch(self, items: List[dict]) -> None:
         """
@@ -54,9 +51,6 @@ class OpenSearchEventPartition(StatelessSinkPartition):
 
         try:
             self._repo.save(items)
-
-            if self._group_id:
-                set_last_message_timestamp(self._group_id)
 
         except (OSConnectionError, ConnectionTimeout) as e:
             logger.warning("Connection error, will retry: %s", e)
@@ -80,16 +74,14 @@ class OpenSearchEventSink(DynamicSink):
     for each worker.
     """
 
-    def __init__(self, settings: Optional[Settings] = None, group_id: str = ""):
+    def __init__(self, settings: Optional[Settings] = None):
         """
         Initialize the sink.
 
         Args:
             settings: Application settings. If None, uses get_settings().
-            group_id: Consumer group ID for metrics tracking
         """
         self._settings = settings or get_settings()
-        self._group_id = group_id
 
     def build(self, step_id: str, worker_index: int, worker_count: int) -> StatelessSinkPartition:
         """
@@ -103,4 +95,4 @@ class OpenSearchEventSink(DynamicSink):
         Returns:
             OpenSearchEventPartition instance
         """
-        return OpenSearchEventPartition(self._settings, self._group_id)
+        return OpenSearchEventPartition(self._settings)

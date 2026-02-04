@@ -21,7 +21,6 @@ from clickstream.infrastructure.kafka import (
     build_kafka_config,
     check_kafka_connection,
     get_admin_client,
-    get_consumer_lag,
     get_topic_partition_count,
     parse_kafka_messages,
     purge_topic,
@@ -29,12 +28,10 @@ from clickstream.infrastructure.kafka import (
 )
 from clickstream.infrastructure.metrics import (
     PipelineMetrics,
-    get_last_message_timestamp,
     get_producer_messages,
     get_throughput_stats,
     increment_producer_messages,
     record_stats_sample,
-    set_last_message_timestamp,
     set_producer_messages,
 )
 from clickstream.infrastructure.repositories import (
@@ -61,19 +58,16 @@ __all__ = [
     "build_kafka_config",
     "check_kafka_connection",
     "get_admin_client",
-    "get_consumer_lag",
     "get_topic_partition_count",
     "parse_kafka_messages",
     "purge_topic",
     "reset_consumer_group",
     # Metrics
     "PipelineMetrics",
-    "get_last_message_timestamp",
     "get_producer_messages",
     "get_throughput_stats",
     "increment_producer_messages",
     "record_stats_sample",
-    "set_last_message_timestamp",
     "set_producer_messages",
     # Repositories
     "PostgreSQLEventRepository",

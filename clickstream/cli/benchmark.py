@@ -38,7 +38,6 @@ from clickstream.cli.shared import (
 )
 from clickstream.consumers import get_consumer
 from clickstream.utils.config import get_settings
-from clickstream.utils.session_state import get_kafka_consumer_lag
 
 
 # ==============================================================================
@@ -122,35 +121,37 @@ def _run_producer_blocking(limit: int, offset: int = 0) -> bool:
 
 
 def _wait_for_consumers_stable(
-    limit: int, group_id: str, quiet: bool = False, stable_threshold: int = 10
+    limit: int, group_id: str, quiet: bool = False, stall_timeout: int = 30
 ) -> tuple[int, float]:
     """
-    Wait until Kafka consumer lag reaches 0, or PostgreSQL event count stabilizes.
+    Wait for consumers to finish processing by watching for process exit.
 
-    Primary exit condition: Kafka consumer lag == 0 (all messages consumed)
-    Fallback exit condition: PostgreSQL count stable for stable_threshold seconds
-                            (used if lag check is unavailable)
+    In benchmark mode, consumers exit when all partitions reach EOF.
+    This function monitors the consumer processes and waits for them to exit,
+    then returns the final PostgreSQL event count.
 
     Args:
-        limit: Target event count (for progress bar)
-        group_id: Kafka consumer group ID to check lag for
+        limit: Target event count (for progress display)
+        group_id: Kafka consumer group ID (unused, kept for API compatibility)
         quiet: Suppress output
-        stable_threshold: Seconds of no change before considering stable (fallback)
+        stall_timeout: Seconds of no change before considering stalled (default: 30)
 
     Returns:
         Tuple of (final_count, duration_seconds)
     """
     start_time = time.time()
     last_count = 0
-    stable_seconds = 0
-    exit_reason = "lag"  # Track why we exited: "lag" or "stable"
+    stall_seconds = 0
 
     while True:
+        # Check if consumers are still running
+        running_pids = get_all_consumer_pids()
+
+        # Get current count for progress display
         count = _get_pg_event_count()
-        lag = get_kafka_consumer_lag(group_id)
 
         # Calculate progress bar (round to avoid 99% when at 99.9%)
-        percent = min(100, round(count / limit * 100))
+        percent = min(100, round(count / limit * 100)) if limit > 0 else 0
         filled = int(percent / 5)  # 20 chars total, each = 5%
         bar = "█" * filled + "░" * (20 - filled)
 
@@ -162,47 +163,37 @@ def _wait_for_consumers_stable(
                 flush=True,
             )
 
-        # Primary exit: Kafka lag is 0 (all messages consumed)
-        if lag is not None and lag == 0 and count > 0:
-            exit_reason = "lag"
-            break
+        # Primary exit: All consumers have exited (finished processing)
+        if len(running_pids) == 0:
+            # Final count after all consumers have exited
+            final_count = _get_pg_event_count()
 
-        # Fallback exit: stability-based
-        # Triggers if lag unavailable OR if count rounds to 100% and stabilized
+            # Print final state with newline
+            if not quiet:
+                percent = min(100, round(final_count / limit * 100)) if limit > 0 else 100
+                filled = int(percent / 5)
+                bar = "█" * filled + "░" * (20 - filled)
+                print(
+                    f"\r  {C.BRIGHT_GREEN}{I.CHECK}{C.RESET} Waiting for consumers... [{bar}] {percent:3d}%                    "
+                )
+
+            duration = time.time() - start_time
+            return final_count, duration
+
+        # Stall detection: if count doesn't change for stall_timeout seconds, exit with error
         if count > 0 and count == last_count:
-            stable_seconds += 1
-            percent_complete = round(count / limit * 100)
-            if stable_seconds >= stable_threshold and (lag is None or percent_complete >= 100):
-                exit_reason = "stable"
-                break
+            stall_seconds += 1
+            if stall_seconds >= stall_timeout:
+                if not quiet:
+                    print(
+                        f"\n  {C.BRIGHT_RED}{I.CROSS}{C.RESET} Processing stalled for {stall_timeout} seconds"
+                    )
+                raise SystemExit(1)
         else:
-            stable_seconds = 0
+            stall_seconds = 0
 
         last_count = count
         time.sleep(1)
-
-    # Print final state with newline (round to avoid 99% when at 99.9%)
-    # Replace bullet with checkmark to indicate completion
-    if not quiet:
-        percent = min(100, round(count / limit * 100))
-        filled = int(percent / 5)
-        bar = "█" * filled + "░" * (20 - filled)
-        if percent >= 100:
-            # Don't show count at 100% - it may not be final due to batching delays
-            print(
-                f"\r  {C.BRIGHT_GREEN}{I.CHECK}{C.RESET} Waiting for consumers... [{bar}] {percent:3d}%                    "
-            )
-        else:
-            print(
-                f"\r  {C.BRIGHT_GREEN}{I.CHECK}{C.RESET} Waiting for consumers... [{bar}] {percent:3d}% ({count:,} events)"
-            )
-
-    # Subtract stabilization wait time if we exited via stability fallback
-    if exit_reason == "stable":
-        duration = time.time() - start_time - stable_threshold
-    else:
-        duration = time.time() - start_time
-    return count, duration
 
 
 def _print_summary(results: list[tuple[int, int]], is_incremental: bool) -> None:
@@ -457,12 +448,28 @@ def benchmark_run(
             reset_consumer_group(consumer_group)
             _print(f"  {C.BRIGHT_GREEN}{I.CHECK}{C.RESET} Resetting data")
 
-            # Start consumers
+            # Run producer first (so consumers have data to process)
+            producer_success = _run_producer_blocking(current_limit, offset)
+            if not producer_success:
+                _print(
+                    f"  {C.BRIGHT_RED}{I.CROSS}{C.RESET} Running producer ({current_limit:,} events)"
+                )
+                if not quiet:
+                    print(
+                        f"  {C.BRIGHT_YELLOW}{I.WARN} Run {run_num} failed, continuing...{C.RESET}"
+                    )
+                continue
+
+            _print(
+                f"  {C.BRIGHT_GREEN}{I.CHECK}{C.RESET} Running producer ({current_limit:,} events)"
+            )
+
+            # Start consumers (with benchmark mode for EOF exit)
             project_root = get_project_root()
             runner_script = project_root / "clickstream" / "consumer_runner.py"
 
             for i in range(num_instances):
-                start_consumer_instance(runner_script, i, project_root)
+                start_consumer_instance(runner_script, i, project_root, benchmark_mode=True)
                 if i < num_instances - 1:
                     time.sleep(1)
 
@@ -487,32 +494,16 @@ def benchmark_run(
                 f"  {C.BRIGHT_GREEN}{I.CHECK}{C.RESET} Starting consumer ({consumer.parallelism_description})"
             )
 
-            # Run producer
-            producer_success = _run_producer_blocking(current_limit, offset)
-            if not producer_success:
-                _print(
-                    f"  {C.BRIGHT_RED}{I.CROSS}{C.RESET} Running producer ({current_limit:,} events)"
-                )
-                stop_all_consumers()
-                if not quiet:
-                    print(
-                        f"  {C.BRIGHT_YELLOW}{I.WARN} Run {run_num} failed, continuing...{C.RESET}"
-                    )
-                continue
-
-            _print(
-                f"  {C.BRIGHT_GREEN}{I.CHECK}{C.RESET} Running producer ({current_limit:,} events)"
-            )
-
-            # Wait for consumers
+            # Wait for consumers (they will exit when EOF is reached)
             consumer_group = settings.postgresql_consumer.group_id
             events_consumed, duration = _wait_for_consumers_stable(
                 current_limit, consumer_group, quiet=quiet
             )
 
-            # Stop consumers
+            # Consumers have exited on their own (benchmark mode)
+            # Clean up any remaining PID files
             stop_all_consumers()
-            _print(f"  {C.BRIGHT_GREEN}{I.CHECK}{C.RESET} Stopping consumers")
+            _print(f"  {C.BRIGHT_GREEN}{I.CHECK}{C.RESET} Consumers finished")
 
             # Calculate throughput
             throughput = round(events_consumed / duration) if duration > 0 else 0

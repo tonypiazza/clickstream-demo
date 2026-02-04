@@ -40,8 +40,12 @@ def run():
     The data flow is:
     - Events arrive from Kafka (separate consumer group)
     - Events are bulk-indexed to OpenSearch
+
+    In benchmark mode (CONSUMER_BENCHMARK_MODE=true), the consumer exits
+    when all assigned partitions have been fully consumed (tail=False).
     """
     settings = get_settings()
+    benchmark_mode = settings.consumer.benchmark_mode
 
     # Check if OpenSearch is enabled
     if not settings.opensearch.enabled:
@@ -64,13 +68,14 @@ def run():
     flow = Dataflow("opensearch_consumer")
 
     # Kafka input with custom source that commits offsets explicitly
-    # This ensures accurate lag tracking for monitoring and benchmarks
+    # In benchmark mode, tail=False causes the source to exit at EOF
     source = KafkaSourceWithCommit(
         brokers=brokers,
         topics=[settings.kafka.events_topic],
         add_config=add_config,
         batch_size=5000,
         starting_offset=OFFSET_STORED,
+        tail=not benchmark_mode,  # tail=False means exit at EOF
     )
     kinp = op.input("kafka_in", flow, source)
 
@@ -82,12 +87,14 @@ def run():
     events = op.map("extract", kinp, extract_event)
 
     # Sink to OpenSearch
-    opensearch_sink = OpenSearchEventSink(settings, group_id=consumer_group)
+    opensearch_sink = OpenSearchEventSink(settings)
     op.output("opensearch_out", events, opensearch_sink)
 
     logger.info("Starting OpenSearch consumer (Bytewax)...")
     logger.info("Consumer group: %s", consumer_group)
     logger.info("Topic: %s", settings.kafka.events_topic)
+    if benchmark_mode:
+        logger.info("Benchmark mode: will exit when all partitions are fully consumed")
 
     # Run dataflow with workers matching partition count
     # Bytewax distributes partitions round-robin across workers:

@@ -6,12 +6,17 @@ Supports both local Docker (PLAINTEXT) and Aiven (SSL) deployments.
 
 import logging
 
+from typing import Literal
+
 from quixstreams import Application
 from quixstreams.kafka.configuration import ConnectionConfig
 
 from clickstream.utils.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+# Type alias for auto_offset_reset
+AutoOffsetReset = Literal["earliest", "latest", "error"]
 
 
 def ensure_topic_exists(topic_name: str, num_partitions: int, replication_factor: int = 1) -> None:
@@ -56,7 +61,9 @@ def ensure_topic_exists(topic_name: str, num_partitions: int, replication_factor
 
 def create_application(
     consumer_group: str,
-    auto_offset_reset: str = "earliest",
+    auto_offset_reset: AutoOffsetReset = "earliest",
+    benchmark_mode: bool = False,
+    num_partitions: int = 3,
 ) -> Application:
     """
     Create a Quix Streams Application with proper Kafka configuration.
@@ -64,6 +71,8 @@ def create_application(
     Args:
         consumer_group: Kafka consumer group ID
         auto_offset_reset: Where to start reading if no committed offset
+        benchmark_mode: If True, exit when all partitions reach EOF
+        num_partitions: Number of topic partitions (for EOF tracking)
 
     Returns:
         Configured Quix Application instance
@@ -73,9 +82,10 @@ def create_application(
     # Check if SSL is configured (Aiven uses mTLS)
     if settings.kafka.security_protocol == "SSL" and settings.kafka.ssl_ca_file:
         # Aiven: SSL with client certificates (mTLS)
+        # Quix expects lowercase security_protocol
         connection = ConnectionConfig(
             bootstrap_servers=settings.kafka.bootstrap_servers,
-            security_protocol="SSL",
+            security_protocol="ssl",
             ssl_ca_location=settings.kafka.ssl_ca_file,
             ssl_certificate_location=settings.kafka.ssl_cert_file,
             ssl_key_location=settings.kafka.ssl_key_file,
@@ -90,8 +100,17 @@ def create_application(
         broker_address=connection,
         consumer_group=consumer_group,
         auto_offset_reset=auto_offset_reset,
-        # Commit offsets every 1 second for responsive lag tracking
+        # Commit checkpoints every 1 second OR every 10000 messages (whichever is sooner)
+        # Larger batch size improves throughput at the cost of less frequent status updates
         commit_interval=1.0,
+        commit_every=10000,
+        # Match poll timeout of other consumers (default is 1.0)
+        consumer_poll_timeout=0.25,
+        # Match librdkafka optimizations from confluent/mage consumers
+        consumer_extra_config={
+            "fetch.min.bytes": 1024,  # Wait for at least 1KB before returning
+            "queued.min.messages": 10000,  # Pre-fetch queue size
+        },
         # Disable changelog topics - using Valkey for state
         use_changelog_topics=False,
         # Don't auto-create topics (we manage via CLI)

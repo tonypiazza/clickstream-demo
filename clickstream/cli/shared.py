@@ -212,12 +212,30 @@ def check_kafka_connection() -> bool:
 
 
 def get_process_pid(pid_file: Path) -> Optional[int]:
-    """Get the PID from a PID file, if the process is still running."""
+    """Get the PID from a PID file, if the process is still running (not zombie).
+
+    Note: We check for zombie status because detached processes (started with
+    start_new_session=True) become zombies after exit, and os.kill(pid, 0)
+    succeeds on zombies. Without this check, we'd incorrectly think the process
+    is still running.
+    """
     if pid_file.exists():
         try:
             pid = int(pid_file.read_text().strip())
-            # Check if process is still running
+            # Check if process exists
             os.kill(pid, 0)
+            # Also check if it's a zombie (os.kill succeeds on zombies)
+            import psutil
+
+            try:
+                proc = psutil.Process(pid)
+                if proc.status() == psutil.STATUS_ZOMBIE:
+                    # Process is zombie, treat as not running
+                    pid_file.unlink(missing_ok=True)
+                    return None
+            except psutil.NoSuchProcess:
+                pid_file.unlink(missing_ok=True)
+                return None
             return pid
         except (ValueError, ProcessLookupError, PermissionError):
             pid_file.unlink(missing_ok=True)
@@ -387,14 +405,26 @@ def start_consumer_instance(
     runner_script: Path,
     instance: int,
     project_root: Path,
+    benchmark_mode: bool = False,
 ) -> bool:
-    """Start a single PostgreSQL consumer instance. Returns True if started successfully."""
+    """Start a single PostgreSQL consumer instance. Returns True if started successfully.
+
+    Args:
+        runner_script: Path to the consumer runner script
+        instance: Instance number (0-indexed)
+        project_root: Path to project root
+        benchmark_mode: If True, set CONSUMER_BENCHMARK_MODE=true for EOF exit
+    """
     pid_file = get_consumer_pid_file(instance, "postgresql")
     log_file = get_consumer_log_file(instance, "postgresql")
 
     env = os.environ.copy()
     python_path = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = f"{project_root}:{python_path}" if python_path else str(project_root)
+
+    # Set benchmark mode environment variable
+    if benchmark_mode:
+        env["CONSUMER_BENCHMARK_MODE"] = "true"
 
     # Redirect stdout/stderr to devnull - the runner handles logging to file
     with open(os.devnull, "w") as devnull:
@@ -423,30 +453,43 @@ def stop_all_consumers() -> int:
     """Stop all running PostgreSQL consumer instances. Returns count of stopped processes."""
     import glob
 
-    stopped = 0
+    import psutil
+
+    # Collect processes and their PID files
+    procs = []
+    pid_files = []
     for pid_file_path in glob.glob("/tmp/consumer_*_postgresql.pid"):
         pid_file = Path(pid_file_path)
         pid = get_process_pid(pid_file)
+        pid_files.append(pid_file)
         if pid:
             try:
-                os.kill(pid, signal.SIGTERM)
-                # Wait up to 10 seconds for graceful shutdown (allows batch processing to complete)
-                for _ in range(20):
-                    time.sleep(0.5)
-                    try:
-                        os.kill(pid, 0)
-                    except ProcessLookupError:
-                        break
-                else:
-                    # Force kill if still running
-                    os.kill(pid, signal.SIGKILL)
-                stopped += 1
-            except ProcessLookupError:
-                pass  # Already terminated
-            except PermissionError:
+                procs.append(psutil.Process(pid))
+            except psutil.NoSuchProcess:
                 pass
+
+    # Send SIGTERM to all processes
+    for proc in procs:
+        try:
+            proc.terminate()
+        except psutil.NoSuchProcess:
+            pass
+
+    # Wait up to 10 seconds for graceful shutdown (parallel wait for all processes)
+    gone, alive = psutil.wait_procs(procs, timeout=10)
+
+    # Force kill any still alive
+    for proc in alive:
+        try:
+            proc.kill()
+        except psutil.NoSuchProcess:
+            pass
+
+    # Clean up all PID files
+    for pid_file in pid_files:
         pid_file.unlink(missing_ok=True)
-    return stopped
+
+    return len(gone) + len(alive)
 
 
 def get_topic_partition_count(topic_name: str) -> Optional[int]:
@@ -503,6 +546,8 @@ def start_opensearch_consumer(project_root: Path) -> bool:
 
 def stop_opensearch_consumer() -> bool:
     """Stop the OpenSearch consumer. Returns True if stopped."""
+    import psutil
+
     instance = get_opensearch_instance()
     pid_file = get_consumer_pid_file(instance, "opensearch")
     pid = get_process_pid(pid_file)
@@ -510,20 +555,17 @@ def stop_opensearch_consumer() -> bool:
         return False
 
     try:
-        os.kill(pid, signal.SIGTERM)
-        # Wait up to 10 seconds for graceful shutdown (allows batch processing to complete)
-        for _ in range(20):
-            time.sleep(0.5)
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                break
-        else:
+        proc = psutil.Process(pid)
+        proc.terminate()
+        try:
+            # Wait up to 10 seconds for graceful shutdown
+            proc.wait(timeout=10)
+        except psutil.TimeoutExpired:
             # Force kill if still running
-            os.kill(pid, signal.SIGKILL)
-    except ProcessLookupError:
+            proc.kill()
+    except psutil.NoSuchProcess:
         pass  # Already terminated
-    except PermissionError:
+    except psutil.AccessDenied:
         return False
 
     pid_file.unlink(missing_ok=True)
