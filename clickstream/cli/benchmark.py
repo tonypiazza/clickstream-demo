@@ -353,12 +353,14 @@ def benchmark_run(
     settings = get_settings()
     partitions = settings.kafka.events_topic_partitions
     consumer = get_consumer("postgresql")
+    num_instances = consumer.num_instances
 
     # Configuration display
     _print()
     _print(f"  {C.BOLD}Benchmark Configuration{C.RESET}")
     _print(f"  • Consumer Impl:        {C.WHITE}{settings.consumer.impl}{C.RESET}")
-    _print(f"  • Partitions/Consumers: {C.WHITE}{partitions}{C.RESET}")
+    _print(f"  • Partitions:           {C.WHITE}{partitions}{C.RESET}")
+    _print(f"  • Consumers:            {C.WHITE}{consumer.parallelism_description}{C.RESET}")
     if offset > 0:
         _print(f"  • Offset (rows to skip): {C.WHITE}{offset:,}{C.RESET}")
     if increment > 0:
@@ -459,18 +461,20 @@ def benchmark_run(
             project_root = get_project_root()
             runner_script = project_root / "clickstream" / "consumer_runner.py"
 
-            for i in range(partitions):
+            for i in range(num_instances):
                 start_consumer_instance(runner_script, i, project_root)
-                if i < partitions - 1:
+                if i < num_instances - 1:
                     time.sleep(1)
 
             time.sleep(2)
 
             running = get_all_consumer_pids()
-            if len(running) != partitions:
-                _print(f"  {C.BRIGHT_RED}{I.CROSS}{C.RESET} Starting {partitions} consumer(s)")
+            if len(running) != num_instances:
                 _print(
-                    f"    {C.BRIGHT_RED}Only {len(running)}/{partitions} consumers started{C.RESET}"
+                    f"  {C.BRIGHT_RED}{I.CROSS}{C.RESET} Starting consumer ({consumer.parallelism_description})"
+                )
+                _print(
+                    f"    {C.BRIGHT_RED}Only {len(running)}/{num_instances} processes started{C.RESET}"
                 )
                 stop_all_consumers()
                 if not quiet:
@@ -479,7 +483,9 @@ def benchmark_run(
                     )
                 continue
 
-            _print(f"  {C.BRIGHT_GREEN}{I.CHECK}{C.RESET} Starting {partitions} consumer(s)")
+            _print(
+                f"  {C.BRIGHT_GREEN}{I.CHECK}{C.RESET} Starting consumer ({consumer.parallelism_description})"
+            )
 
             # Run producer
             producer_success = _run_producer_blocking(current_limit, offset)

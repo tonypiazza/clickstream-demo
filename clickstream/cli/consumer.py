@@ -161,15 +161,6 @@ def consumer_start(
     truncate_log: Annotated[
         bool, typer.Option("--truncate-log", "-t", help="Truncate log files before starting")
     ] = False,
-    instances: Annotated[
-        Optional[int],
-        typer.Option(
-            "--instances",
-            "-i",
-            help="Number of consumer instances to start (PostgreSQL only)",
-            show_default="number of partitions",
-        ),
-    ] = None,
     consumer_type: Annotated[
         ConsumerType,
         typer.Option("--type", "-T", help="Which consumer(s) to start"),
@@ -177,9 +168,10 @@ def consumer_start(
 ) -> None:
     """Start the consumer pipeline as background processes.
 
-    Spawns consumer processes for parallel processing. By default, spawns one
-    PostgreSQL consumer per Kafka partition. Use --instances to spawn fewer
-    consumers (each consumer will handle multiple partitions).
+    Spawns consumer processes for parallel processing. The number of processes
+    is determined by the consumer implementation:
+    - Traditional consumers (confluent, kafka_python): one process per partition
+    - Dataflow consumers (bytewax): single process with internal workers
 
     Use --type to start only specific consumers:
     - all (default): Start both PostgreSQL and OpenSearch (if enabled)
@@ -192,13 +184,11 @@ def consumer_start(
         clickstream consumer start
         clickstream consumer start --type postgresql    # Start only PostgreSQL consumers
         clickstream consumer start --type opensearch    # Start only OpenSearch consumer
-        clickstream consumer start --instances 2        # Start 2 PostgreSQL consumers
         clickstream consumer start --truncate-log       # Clear logs before starting
     """
     import glob as glob_module
 
     settings = get_settings()
-    max_instances = settings.kafka.events_topic_partitions
 
     start_postgresql = consumer_type in (ConsumerType.all, ConsumerType.postgresql)
     start_opensearch = consumer_type in (ConsumerType.all, ConsumerType.opensearch)
@@ -211,27 +201,11 @@ def consumer_start(
         )
         raise typer.Exit(1)
 
-    # Warn if --instances is specified with --type opensearch
-    if consumer_type == ConsumerType.opensearch and instances is not None:
-        print(
-            f"{C.BRIGHT_YELLOW}{I.WARN} --instances is ignored for OpenSearch "
-            f"(single instance){C.RESET}"
-        )
+    # Get consumer to determine parallelism model
+    from clickstream.consumers import get_consumer
 
-    # Determine number of PostgreSQL instances to start
-    if instances is None:
-        num_instances = max_instances
-    else:
-        if instances < 1:
-            print(f"{C.BRIGHT_RED}{I.CROSS} --instances must be at least 1{C.RESET}")
-            raise typer.Exit(1)
-        if instances > max_instances:
-            print(
-                f"{C.BRIGHT_RED}{I.CROSS} --instances ({instances}) cannot exceed "
-                f"partition count ({max_instances}){C.RESET}"
-            )
-            raise typer.Exit(1)
-        num_instances = instances
+    pg_consumer = get_consumer("postgresql")
+    num_instances = pg_consumer.num_instances
 
     # Check if already running (only for requested type)
     running = count_running_consumers()
@@ -260,11 +234,12 @@ def consumer_start(
     # Check topic partition count if topic exists (only if starting PostgreSQL)
     if start_postgresql:
         topic = settings.kafka.events_topic
+        num_partitions = pg_consumer.num_partitions
         existing_partitions = get_topic_partition_count(topic)
-        if existing_partitions is not None and existing_partitions < max_instances:
+        if existing_partitions is not None and existing_partitions < num_partitions:
             print(
                 f"{C.BRIGHT_RED}{I.CROSS} Topic '{topic}' has {existing_partitions} partitions, "
-                f"but {max_instances} are configured{C.RESET}"
+                f"but {num_partitions} are configured{C.RESET}"
             )
             print(
                 f"  Run '{C.WHITE}clickstream data reset -y{C.RESET}' to recreate topic with correct partitions"
@@ -294,13 +269,7 @@ def consumer_start(
             print(f"{C.BRIGHT_RED}{I.CROSS} Failed to initialize schema: {e}{C.RESET}")
             raise typer.Exit(1)
 
-        if num_instances < max_instances:
-            print(
-                f"  Starting {num_instances} PostgreSQL consumer instances "
-                f"(for {max_instances} partitions)..."
-            )
-        else:
-            print(f"  Starting {num_instances} PostgreSQL consumer instances...")
+        print(f"  Starting PostgreSQL consumer ({pg_consumer.parallelism_description})...")
 
         runner_script = project_root / "clickstream" / "consumer_runner.py"
 
@@ -317,7 +286,8 @@ def consumer_start(
         running = get_all_consumer_pids()
         if len(running) == num_instances:
             print(
-                f"{C.BRIGHT_GREEN}{I.CHECK} PostgreSQL consumers started ({num_instances} instances){C.RESET}"
+                f"{C.BRIGHT_GREEN}{I.CHECK} PostgreSQL consumer started "
+                f"({pg_consumer.parallelism_description}){C.RESET}"
             )
             print(f"  Logs:")
             for i in range(num_instances):
@@ -441,15 +411,6 @@ def consumer_restart(
     truncate_log: Annotated[
         bool, typer.Option("--truncate-log", "-t", help="Truncate log files before starting")
     ] = False,
-    instances: Annotated[
-        Optional[int],
-        typer.Option(
-            "--instances",
-            "-i",
-            help="Number of consumer instances to start (PostgreSQL only)",
-            show_default="number of partitions",
-        ),
-    ] = None,
     consumer_type: Annotated[
         ConsumerType,
         typer.Option("--type", "-T", help="Which consumer(s) to restart"),
@@ -469,7 +430,6 @@ def consumer_restart(
         clickstream consumer restart
         clickstream consumer restart --type postgresql     # Restart only PostgreSQL consumers
         clickstream consumer restart --type opensearch     # Restart only OpenSearch consumer
-        clickstream consumer restart --instances 2         # Restart with 2 PostgreSQL consumers
         clickstream consumer restart --truncate-log        # Clear logs before starting
     """
     restart_postgresql = consumer_type in (ConsumerType.all, ConsumerType.postgresql)
@@ -491,7 +451,7 @@ def consumer_restart(
         time.sleep(1)  # Brief pause to ensure clean shutdown
 
     # Start fresh
-    consumer_start(truncate_log=truncate_log, instances=instances, consumer_type=consumer_type)
+    consumer_start(truncate_log=truncate_log, consumer_type=consumer_type)
 
 
 def consumer_logs(

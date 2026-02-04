@@ -13,7 +13,6 @@ import json
 import logging
 
 from bytewax import operators as op
-from bytewax.connectors.kafka import operators as kop
 from bytewax.dataflow import Dataflow
 from bytewax.run import cli_main
 from confluent_kafka import OFFSET_STORED
@@ -24,6 +23,7 @@ from clickstream.consumers.bytewax.config import (
     get_kafka_brokers,
 )
 from clickstream.consumers.bytewax.sinks.opensearch import OpenSearchEventSink
+from clickstream.consumers.bytewax.sources.kafka import KafkaSourceWithCommit
 from clickstream.utils.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -57,31 +57,29 @@ def run():
     # Consumer group for OpenSearch pipeline (separate from PostgreSQL)
     consumer_group = settings.opensearch.consumer_group_id
     brokers = get_kafka_brokers()
-    add_config = get_kafka_add_config(group_id=consumer_group, auto_commit=True)
+    # Get Kafka config with group.id and SSL settings
+    add_config = get_kafka_add_config(group_id=consumer_group)
 
     # Create dataflow
     flow = Dataflow("opensearch_consumer")
 
-    # Kafka input with consumer group
-    # batch_size=5000 improves throughput by fetching more messages per poll
-    # starting_offset=OFFSET_STORED uses committed consumer group offsets
-    kinp = kop.input(
-        "kafka_in",
-        flow,
+    # Kafka input with custom source that commits offsets explicitly
+    # This ensures accurate lag tracking for monitoring and benchmarks
+    source = KafkaSourceWithCommit(
         brokers=brokers,
         topics=[settings.kafka.events_topic],
         add_config=add_config,
         batch_size=5000,
         starting_offset=OFFSET_STORED,
     )
+    kinp = op.input("kafka_in", flow, source)
 
     # Extract event dict from Kafka message
     def extract_event(msg):
         """Extract and parse event from Kafka message."""
         return json.loads(msg.value.decode("utf-8"))
 
-    # Process successful messages
-    events = op.map("extract", kinp.oks, extract_event)
+    events = op.map("extract", kinp, extract_event)
 
     # Sink to OpenSearch
     opensearch_sink = OpenSearchEventSink(settings, group_id=consumer_group)
@@ -91,8 +89,16 @@ def run():
     logger.info("Consumer group: %s", consumer_group)
     logger.info("Topic: %s", settings.kafka.events_topic)
 
-    # Run dataflow with single worker
-    cli_main(flow, workers_per_process=1)
+    # Run dataflow with workers matching partition count
+    # Bytewax distributes partitions round-robin across workers:
+    # - Partition 0 -> Worker 0
+    # - Partition 1 -> Worker 1
+    # - Partition 2 -> Worker 2
+    # This ensures each partition has exactly one consumer, preventing
+    # offset commit conflicts when running a single Bytewax instance.
+    num_workers = settings.kafka.events_topic_partitions
+    logger.info("Workers per process: %d", num_workers)
+    cli_main(flow, workers_per_process=num_workers)
 
 
 if __name__ == "__main__":

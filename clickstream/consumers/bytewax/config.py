@@ -32,23 +32,20 @@ def get_kafka_brokers() -> List[str]:
 
 def get_kafka_add_config(
     group_id: Optional[str] = None,
-    auto_commit: bool = True,
 ) -> Dict[str, str]:
     """
     Build additional Kafka config for Bytewax connectors.
 
     Bytewax uses confluent-kafka which requires different config key names
     than kafka-python. This function builds the add_config dict for
-    kop.input() and KafkaSource().
+    KafkaSourceWithCommit.
 
-    Note: Bytewax's KafkaSource sets group.id to "BYTEWAX_IGNORED" by default
-    and manages offsets through its own recovery system. However, we override
-    this with our own group.id and enable auto-commit so that Kafka consumer
-    group offsets are tracked for monitoring purposes (e.g., lag calculation).
+    Note: Our custom KafkaSourceWithCommit handles offset commits explicitly
+    after each batch, so auto-commit is disabled. This ensures accurate lag
+    tracking for monitoring purposes (status display, benchmarks).
 
     Args:
         group_id: Consumer group ID (required for consumer)
-        auto_commit: Enable auto-commit of offsets (default: True for monitoring)
 
     Returns:
         Dict with confluent-kafka compatible configuration
@@ -59,11 +56,8 @@ def get_kafka_add_config(
     # Consumer group configuration
     if group_id:
         config["group.id"] = group_id
-        config["enable.auto.commit"] = str(auto_commit).lower()
-        if auto_commit:
-            # Reduce auto-commit interval from 5s default to 1s for more accurate
-            # lag tracking in benchmarks and monitoring tools
-            config["auto.commit.interval.ms"] = "1000"
+        # Auto-commit disabled - KafkaSourceWithCommit commits explicitly after each batch
+        config["enable.auto.commit"] = "false"
 
     # SSL configuration for Aiven
     if settings.kafka.security_protocol == "SSL":

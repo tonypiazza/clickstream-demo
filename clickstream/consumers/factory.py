@@ -33,29 +33,31 @@ def get_consumer(consumer_type: ConsumerType) -> StreamingConsumer:
     """
     from clickstream.utils.config import get_settings
 
-    impl = get_settings().consumer.impl
+    settings = get_settings()
+    impl = settings.consumer.impl
+    num_partitions = settings.kafka.events_topic_partitions
 
     match impl:
         case "confluent":
             from clickstream.consumers.confluent import ConfluentConsumer
 
-            return ConfluentConsumer(consumer_type)
+            return ConfluentConsumer(consumer_type, num_partitions)
         case "kafka_python":
             from clickstream.consumers.kafka_python import KafkaPythonConsumer
 
-            return KafkaPythonConsumer(consumer_type)
+            return KafkaPythonConsumer(consumer_type, num_partitions)
         case "quix":
             from clickstream.consumers.quix import QuixConsumer
 
-            return QuixConsumer(consumer_type)
+            return QuixConsumer(consumer_type, num_partitions)
         case "mage":
             from clickstream.consumers.mage import MageConsumer
 
-            return MageConsumer(consumer_type)
+            return MageConsumer(consumer_type, num_partitions)
         case "bytewax":
             from clickstream.consumers.bytewax import BytewaxConsumer
 
-            return BytewaxConsumer(consumer_type)
+            return BytewaxConsumer(consumer_type, num_partitions)
         case _:
             raise ValueError(
                 f"Unknown consumer implementation: '{impl}'.\n"
