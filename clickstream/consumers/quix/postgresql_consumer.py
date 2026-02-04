@@ -8,10 +8,7 @@ and writes events + sessions to PostgreSQL.
 import logging
 
 from clickstream.consumers.quix.config import create_application, create_topic, ensure_topic_exists
-from clickstream.consumers.quix.sinks.postgresql import (
-    PostgreSQLEventSink,
-    PostgreSQLSessionSink,
-)
+from clickstream.consumers.quix.sinks.postgresql import PostgreSQLSink
 from clickstream.utils.config import get_settings
 from clickstream.utils.session_state import (
     SessionState,
@@ -28,17 +25,17 @@ def run():
     This function:
     1. Creates a Quix Application with Kafka configuration
     2. Initializes Valkey session state manager
-    3. Sets up event and session sinks with batching optimization
+    3. Sets up unified sink for events and sessions
 
     The data flow is:
     - Events arrive from Kafka in batches
-    - Events sink: writes raw events to PostgreSQL events table
-    - Sessions sink: batches Valkey updates (2 round-trips per batch),
-      then upserts resulting sessions to PostgreSQL
+    - Unified sink handles both events and sessions in a single write() call:
+      1. Saves events to PostgreSQL
+      2. Batch updates sessions in Valkey (2 round-trips per batch)
+      3. Upserts sessions to PostgreSQL
 
-    Performance note: The sessions sink uses batch_update_sessions() instead of
-    per-event update_session() calls. This is critical for remote Valkey servers
-    (e.g., Aiven) where network latency would otherwise limit throughput to ~7 events/sec.
+    This single-sink pattern ensures reliable checkpoint/offset commits,
+    fixing the lag tracking issues caused by the previous dual-sink approach.
     """
     settings = get_settings()
 
@@ -68,22 +65,19 @@ def run():
         ttl_hours=settings.valkey.session_ttl_hours,
     )
 
-    # Initialize sinks
-    # Events sink writes raw events to PostgreSQL
-    events_sink = PostgreSQLEventSink(settings, group_id=consumer_group)
-    # Sessions sink handles Valkey batching internally (2 round-trips per batch)
-    # This is much faster than per-event updates when using remote Valkey (e.g., Aiven)
-    sessions_sink = PostgreSQLSessionSink(settings, session_state=session_state)
+    # Initialize unified sink for events and sessions
+    sink = PostgreSQLSink(
+        settings=settings,
+        session_state=session_state,
+        group_id=consumer_group,
+    )
 
     # Build streaming dataframe
     sdf = app.dataframe(topic)
 
-    # Sink original events to PostgreSQL events table
-    sdf.sink(events_sink)
-
-    # Sink events to sessions sink - it handles Valkey batching + PostgreSQL upserts internally
-    # This avoids the slow sdf.apply(process_event) pattern that made per-event Valkey calls
-    sdf.sink(sessions_sink)
+    # Single sink handles both events and sessions in one write() call
+    # This fixes checkpoint/commit issues that caused lag tracking problems
+    sdf.sink(sink)
 
     logger.info("Starting PostgreSQL consumer (Quix Streams)...")
     logger.info("Consumer group: %s", consumer_group)

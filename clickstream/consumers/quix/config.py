@@ -90,6 +90,8 @@ def create_application(
         broker_address=connection,
         consumer_group=consumer_group,
         auto_offset_reset=auto_offset_reset,
+        # Commit offsets every 1 second for responsive lag tracking
+        commit_interval=1.0,
         # Disable changelog topics - using Valkey for state
         use_changelog_topics=False,
         # Don't auto-create topics (we manage via CLI)

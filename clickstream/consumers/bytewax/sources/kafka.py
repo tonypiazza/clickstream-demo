@@ -108,6 +108,7 @@ class _KafkaSourcePartitionWithCommit(StatefulSourcePartition[KafkaSourceMessage
         starting_offset: int,
         resume_state: Optional[int],
         batch_size: int,
+        poll_timeout: float,
     ):
         """
         Initialize the partition handler.
@@ -120,6 +121,7 @@ class _KafkaSourcePartitionWithCommit(StatefulSourcePartition[KafkaSourceMessage
             starting_offset: Initial offset (OFFSET_BEGINNING, OFFSET_END, etc.)
             resume_state: Offset to resume from (from Bytewax recovery)
             batch_size: Maximum messages to consume per batch
+            poll_timeout: Timeout in seconds for each poll
         """
         self._offset = starting_offset if resume_state is None else resume_state
         self._consumer = Consumer(config)
@@ -128,6 +130,7 @@ class _KafkaSourcePartitionWithCommit(StatefulSourcePartition[KafkaSourceMessage
         self._topic = topic
         self._part_idx = part_idx
         self._batch_size = batch_size
+        self._poll_timeout = poll_timeout
         self._eof = False
         self._step_id = step_id
 
@@ -152,7 +155,7 @@ class _KafkaSourcePartitionWithCommit(StatefulSourcePartition[KafkaSourceMessage
         if self._eof:
             raise StopIteration()
 
-        msgs = self._consumer.consume(self._batch_size, timeout=0.001)
+        msgs = self._consumer.consume(self._batch_size, timeout=self._poll_timeout)
 
         batch: List[KafkaSourceMessage] = []
         last_offset = None
@@ -259,6 +262,7 @@ class KafkaSourceWithCommit(FixedPartitionedSource[KafkaSourceMessage, Optional[
         starting_offset: int = OFFSET_BEGINNING,
         add_config: Optional[Dict[str, str]] = None,
         batch_size: int = 1000,
+        poll_timeout: float = 0.1,
     ):
         """
         Initialize the Kafka source.
@@ -270,6 +274,7 @@ class KafkaSourceWithCommit(FixedPartitionedSource[KafkaSourceMessage, Optional[
             starting_offset: Initial offset (OFFSET_BEGINNING, OFFSET_END, OFFSET_STORED)
             add_config: Additional Kafka configuration (group.id, SSL settings, etc.)
             batch_size: Maximum messages to consume per batch
+            poll_timeout: Timeout in seconds for each poll (default 0.1s / 100ms)
         """
         if isinstance(brokers, str):
             raise TypeError("brokers must be an iterable, not a string")
@@ -282,6 +287,7 @@ class KafkaSourceWithCommit(FixedPartitionedSource[KafkaSourceMessage, Optional[
         self._starting_offset = starting_offset
         self._add_config = add_config or {}
         self._batch_size = batch_size
+        self._poll_timeout = poll_timeout
 
     def list_parts(self) -> List[str]:
         """
@@ -337,4 +343,5 @@ class KafkaSourceWithCommit(FixedPartitionedSource[KafkaSourceMessage, Optional[
             self._starting_offset,
             resume_state,
             self._batch_size,
+            self._poll_timeout,
         )
