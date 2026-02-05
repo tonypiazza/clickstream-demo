@@ -248,7 +248,7 @@ def run() -> None:
             # Use consume() batch API - more efficient than poll()
             # Returns list of messages directly (not dict of partition -> messages)
             messages = consumer.consume(
-                num_messages=consumer_settings.batch_size,
+                num_messages=10000,  # Larger batch for better throughput
                 timeout=consumer_settings.poll_timeout_ms / 1000.0,  # Convert to seconds
             )
 

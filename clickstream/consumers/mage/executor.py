@@ -148,7 +148,7 @@ def _run_postgresql_consumer(settings) -> None:
     """Run the PostgreSQL consumer pipeline."""
     global _shutdown_requested
 
-    from confluent_kafka import Consumer, KafkaError
+    from confluent_kafka import Consumer, KafkaError, TopicPartition
     from clickstream.infrastructure.repositories.postgresql import (
         PostgreSQLEventRepository,
         PostgreSQLSessionRepository,
@@ -160,7 +160,7 @@ def _run_postgresql_consumer(settings) -> None:
 
     group_id = settings.postgresql_consumer.group_id
     topic = settings.kafka.events_topic
-    batch_size = settings.consumer.batch_size
+    batch_size = 10000  # Larger batch for better throughput
     poll_timeout = settings.consumer.poll_timeout_ms / 1000.0
     benchmark_mode = settings.consumer.benchmark_mode
 
@@ -227,6 +227,34 @@ def _run_postgresql_consumer(settings) -> None:
         eof_partitions -= revoked
         logger.info("Revoked %d partitions", len(partitions))
 
+    def _check_all_partitions_at_end(consumer) -> bool:
+        """
+        Check if all assigned partitions have been fully consumed.
+
+        This is a fallback for when EOF signals are missed after rebalance.
+        Compares committed offsets against high watermarks.
+
+        Returns:
+            True if all partitions are at end, False otherwise
+        """
+        if not assigned_partitions:
+            return False
+
+        for topic_name, part_idx in assigned_partitions:
+            try:
+                tp = TopicPartition(topic_name, part_idx)
+                low, high = consumer.get_watermark_offsets(tp, timeout=5.0)
+                committed = consumer.committed([tp], timeout=5.0)
+                if committed and committed[0].offset >= 0:
+                    if committed[0].offset < high:
+                        return False  # This partition is not at end
+                else:
+                    return False  # No committed offset, not at end
+            except Exception as e:
+                logger.debug("Could not check watermarks for %s-%d: %s", topic_name, part_idx, e)
+                return False
+        return True
+
     consumer.subscribe([topic], on_assign=on_assign, on_revoke=on_revoke)
 
     # Initialize repositories
@@ -250,6 +278,10 @@ def _run_postgresql_consumer(settings) -> None:
     if benchmark_mode:
         logger.info("Benchmark mode: will exit when all assigned partitions reach EOF")
 
+    # Track consecutive empty polls for fallback EOF detection
+    empty_poll_count = 0
+    max_empty_polls = 5  # Exit after ~1.25 seconds of no messages (5 * 0.25s)
+
     try:
         while not _shutdown_requested:
             # Consume messages
@@ -266,7 +298,24 @@ def _run_postgresql_consumer(settings) -> None:
                         len(assigned_partitions),
                     )
                     break
+
+                # Fallback: after consecutive empty polls, check watermarks directly
+                # This handles the case where EOF signals are missed after rebalance
+                if benchmark_mode and assigned_partitions:
+                    empty_poll_count += 1
+                    if empty_poll_count >= max_empty_polls:
+                        if _check_all_partitions_at_end(consumer):
+                            logger.info(
+                                "All %d assigned partitions at end (watermark check), exiting benchmark mode",
+                                len(assigned_partitions),
+                            )
+                            break
+                        # Reset counter to avoid spamming watermark checks
+                        empty_poll_count = 0
                 continue
+
+            # Reset empty poll counter when we get messages
+            empty_poll_count = 0
 
             # Parse messages
             events = []
@@ -350,12 +399,12 @@ def _run_opensearch_consumer(settings) -> None:
     """Run the OpenSearch consumer pipeline."""
     global _shutdown_requested
 
-    from confluent_kafka import Consumer, KafkaError
+    from confluent_kafka import Consumer, KafkaError, TopicPartition
     from clickstream.infrastructure.search.opensearch import OpenSearchRepository
 
     group_id = settings.opensearch.consumer_group_id
     topic = settings.kafka.events_topic
-    batch_size = settings.consumer.batch_size
+    batch_size = 10000  # Larger batch for better throughput
     poll_timeout = settings.consumer.poll_timeout_ms / 1000.0
     benchmark_mode = settings.consumer.benchmark_mode
 
@@ -422,6 +471,34 @@ def _run_opensearch_consumer(settings) -> None:
         eof_partitions -= revoked
         logger.info("Revoked %d partitions", len(partitions))
 
+    def _check_all_partitions_at_end(consumer) -> bool:
+        """
+        Check if all assigned partitions have been fully consumed.
+
+        This is a fallback for when EOF signals are missed after rebalance.
+        Compares committed offsets against high watermarks.
+
+        Returns:
+            True if all partitions are at end, False otherwise
+        """
+        if not assigned_partitions:
+            return False
+
+        for topic_name, part_idx in assigned_partitions:
+            try:
+                tp = TopicPartition(topic_name, part_idx)
+                low, high = consumer.get_watermark_offsets(tp, timeout=5.0)
+                committed = consumer.committed([tp], timeout=5.0)
+                if committed and committed[0].offset >= 0:
+                    if committed[0].offset < high:
+                        return False  # This partition is not at end
+                else:
+                    return False  # No committed offset, not at end
+            except Exception as e:
+                logger.debug("Could not check watermarks for %s-%d: %s", topic_name, part_idx, e)
+                return False
+        return True
+
     consumer.subscribe([topic], on_assign=on_assign, on_revoke=on_revoke)
 
     # Initialize OpenSearch repository
@@ -434,6 +511,10 @@ def _run_opensearch_consumer(settings) -> None:
     logger.info("Index: %s", settings.opensearch.events_index)
     if benchmark_mode:
         logger.info("Benchmark mode: will exit when all assigned partitions reach EOF")
+
+    # Track consecutive empty polls for fallback EOF detection
+    empty_poll_count = 0
+    max_empty_polls = 5  # Exit after ~1.25 seconds of no messages (5 * 0.25s)
 
     try:
         while not _shutdown_requested:
@@ -451,7 +532,24 @@ def _run_opensearch_consumer(settings) -> None:
                         len(assigned_partitions),
                     )
                     break
+
+                # Fallback: after consecutive empty polls, check watermarks directly
+                # This handles the case where EOF signals are missed after rebalance
+                if benchmark_mode and assigned_partitions:
+                    empty_poll_count += 1
+                    if empty_poll_count >= max_empty_polls:
+                        if _check_all_partitions_at_end(consumer):
+                            logger.info(
+                                "All %d assigned partitions at end (watermark check), exiting benchmark mode",
+                                len(assigned_partitions),
+                            )
+                            break
+                        # Reset counter to avoid spamming watermark checks
+                        empty_poll_count = 0
                 continue
+
+            # Reset empty poll counter when we get messages
+            empty_poll_count = 0
 
             # Parse messages
             events = []

@@ -77,18 +77,19 @@ def run():
         brokers=brokers,
         topics=[settings.kafka.events_topic],
         add_config=add_config,
-        batch_size=5000,
+        batch_size=10000,
         starting_offset=OFFSET_STORED,
         tail=not benchmark_mode,  # tail=False means exit at EOF
     )
     kinp = op.input("kafka_in", flow, source)
 
-    # Extract event dict from Kafka message
-    def extract_event(msg):
-        """Extract and parse event from Kafka message."""
-        return json.loads(msg.value.decode("utf-8"))
+    # Extract event dicts from Kafka messages in batches
+    # Using flat_map_batch preserves batch processing for better performance
+    def extract_events_batch(msgs):
+        """Extract and parse events from a batch of Kafka messages."""
+        return [json.loads(msg.value.decode("utf-8")) for msg in msgs]
 
-    events = op.map("extract", kinp, extract_event)
+    events = op.flat_map_batch("extract", kinp, extract_events_batch)
 
     # Unified sink for events + sessions
     # Processes both in a single write_batch() call for optimal performance

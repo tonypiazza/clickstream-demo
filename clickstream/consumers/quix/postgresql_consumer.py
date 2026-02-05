@@ -5,7 +5,7 @@ Consumes events from Kafka, updates session state in Valkey,
 and writes events + sessions to PostgreSQL.
 
 In benchmark mode (CONSUMER_BENCHMARK_MODE=true), the consumer uses
-app.run(timeout=3.0) to automatically exit 3 seconds after the last
+app.run(timeout=1.0) to automatically exit 1 second after the last
 message is consumed, enabling accurate throughput measurements.
 """
 
@@ -40,7 +40,7 @@ def run():
 
     This single-sink pattern ensures reliable checkpoint/offset commits.
 
-    In benchmark mode, uses app.run(timeout=3.0) to exit after 3 seconds
+    In benchmark mode, uses app.run(timeout=1.0) to exit after 1 second
     of no new messages, enabling accurate throughput measurements.
     """
     settings = get_settings()
@@ -92,8 +92,8 @@ def run():
     logger.info("Topic: %s", settings.kafka.events_topic)
 
     if benchmark_mode:
-        logger.info("Benchmark mode: will exit 3 seconds after last message")
-        app.run(timeout=3.0)
+        logger.info("Benchmark mode: will exit 1 second after last message")
+        app.run(timeout=1.0)
     else:
         app.run()
 

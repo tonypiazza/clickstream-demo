@@ -109,7 +109,10 @@ def create_application(
         # Match librdkafka optimizations from confluent/mage consumers
         consumer_extra_config={
             "fetch.min.bytes": 1024,  # Wait for at least 1KB before returning
+            "fetch.max.bytes": 52428800,  # 50MB max fetch size
+            "max.partition.fetch.bytes": 1048576,  # 1MB per partition
             "queued.min.messages": 10000,  # Pre-fetch queue size
+            "queued.max.messages.kbytes": 65536,  # 64MB pre-fetch buffer
         },
         # Disable changelog topics - using Valkey for state
         use_changelog_topics=False,
