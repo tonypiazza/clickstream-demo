@@ -32,8 +32,6 @@ from clickstream.cli.shared import (
     reset_consumer_group,
     start_consumer_instance,
     stop_all_consumers,
-    check_db_connection,
-    check_kafka_connection,
     get_project_root,
     is_process_running,
 )
@@ -410,7 +408,7 @@ def benchmark_run(
         clickstream benchmark run --limit 100000 --consumer-impl quix -y    # Use specific consumer
     """
     from clickstream.utils.db import reset_schema
-    from clickstream.utils.session_state import check_valkey_connection, get_valkey_client
+    from clickstream.utils.session_state import get_valkey_client
 
     # Helper for conditional printing
     def _print(msg: str = "") -> None:
@@ -582,20 +580,36 @@ def benchmark_run(
     _print(f"  {C.BRIGHT_GREEN}{I.CHECK}{C.RESET} Producer is stopped")
 
     # Check services
-    if not check_kafka_connection():
-        print(f"{C.BRIGHT_RED}{I.CROSS} Kafka is unreachable{C.RESET}")
-        raise typer.Exit(1)
-    _print(f"  {C.BRIGHT_GREEN}{I.CHECK}{C.RESET} Kafka is reachable")
+    from clickstream.utils.config import get_health_checker
 
-    if not check_db_connection():
-        print(f"{C.BRIGHT_RED}{I.CROSS} PostgreSQL is unreachable{C.RESET}")
-        raise typer.Exit(1)
-    _print(f"  {C.BRIGHT_GREEN}{I.CHECK}{C.RESET} PostgreSQL is reachable")
+    health = get_health_checker(settings)
+    required = ["kafka", "pg", "valkey"]
+    svc_labels = {"kafka": "Kafka", "pg": "PostgreSQL", "valkey": "Valkey"}
 
-    if not check_valkey_connection():
-        print(f"{C.BRIGHT_RED}{I.CROSS} Valkey is unreachable{C.RESET}")
+    first_check = True
+
+    def _on_status(statuses):
+        nonlocal first_check
+        if first_check:
+            first_check = False
+            all_running = all(s.is_running for s in statuses.values())
+            if not all_running:
+                _print(f"  {C.BRIGHT_YELLOW}{I.WARN}{C.RESET} Waiting for services...")
+                for svc, status in statuses.items():
+                    icon = (
+                        f"{C.BRIGHT_GREEN}{I.CHECK}"
+                        if status.is_running
+                        else f"{C.BRIGHT_YELLOW}{I.WARN}"
+                    )
+                    _print(f"    {icon}{C.RESET} {svc_labels.get(svc, svc)}: {status.state}")
+
+    try:
+        health.wait_until_ready(required, timeout=300.0, poll_interval=10.0, on_status=_on_status)
+        for svc in required:
+            _print(f"  {C.BRIGHT_GREEN}{I.CHECK}{C.RESET} {svc_labels[svc]} is reachable")
+    except TimeoutError as e:
+        print(f"{C.BRIGHT_RED}{I.CROSS} {e}{C.RESET}")
         raise typer.Exit(1)
-    _print(f"  {C.BRIGHT_GREEN}{I.CHECK}{C.RESET} Valkey is reachable")
 
     # Track results for summary
     results: list[tuple[int, int]] = []  # (events, throughput)

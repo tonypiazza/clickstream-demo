@@ -20,6 +20,7 @@ from clickstream.base.repositories import (
     SessionRepository,
 )
 from clickstream.base.runner import BaseRunner
+from clickstream.base.service_health import ServiceHealthCheck, ServiceStatus
 from clickstream.base.session_state import SessionStateStore
 from clickstream.base.sinks import BaseSink
 
@@ -31,6 +32,8 @@ __all__ = [
     "Cache",
     "EventRepository",
     "SearchRepository",
+    "ServiceHealthCheck",
+    "ServiceStatus",
     "SessionRepository",
     "SessionStateStore",
 ]

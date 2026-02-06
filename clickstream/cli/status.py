@@ -12,7 +12,6 @@ when checking service status.
 """
 
 import json as json_module
-import os
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
@@ -25,7 +24,6 @@ from clickstream.cli.shared import (
     BOX_WIDTH,
     PRODUCER_LOG_FILE,
     PRODUCER_PID_FILE,
-    B,
     C,
     I,
     _box_bottom,
@@ -151,32 +149,24 @@ def _collect_kafka_data() -> dict[str, Any]:
     """Collect Kafka service status data.
 
     Strategy:
-    1. Try Aiven API first (fast, ~1-2s)
-    2. If API confirms service is RUNNING, get topic details via Kafka (shorter timeout)
-    3. If API not configured or fails, fall back to direct connection (~30s)
+    1. Use ServiceHealthCheck to determine if service is running
+    2. If running, get topic details via direct Kafka connection
+    3. If not running, return the reported state
     """
-    # Try Aiven API first (fast path)
-    try:
-        from clickstream.utils.aiven import get_kafka_status
+    from clickstream.utils.config import get_health_checker
 
-        api_status = get_kafka_status(timeout=5)
-        if api_status:
-            state = api_status.get("state", "").upper()
-            if state == "RUNNING":
-                # Service is running per API, get topic details via Kafka
-                # Use shorter timeout since we know the service is up
-                return _collect_kafka_topics_direct(timeout_ms=10000)
-            else:
-                # Service exists but not running (POWEROFF, REBUILDING, etc.)
-                return {
-                    "status": state.lower(),
-                    "topics": [],
-                }
-    except Exception:
-        pass
+    health = get_health_checker()
+    status = health.check_service("kafka")
 
-    # Fall back to direct Kafka connection (for local Docker or if API fails)
-    return _collect_kafka_topics_direct(timeout_ms=30000)
+    if not status.is_running:
+        return {
+            "status": status.state,
+            "topics": [],
+        }
+
+    # Service is running, get topic details via direct connection
+    # Use shorter timeout for Aiven (we already know the service is up)
+    return _collect_kafka_topics_direct(timeout_ms=10000)
 
 
 def _collect_kafka_topics_direct(timeout_ms: int = 30000) -> dict[str, Any]:
@@ -240,35 +230,29 @@ def _collect_valkey_data() -> dict[str, Any]:
     """Collect Valkey service status data.
 
     Strategy:
-    1. Try Aiven API first to check if service is running
+    1. Use ServiceHealthCheck to determine if service is running
     2. If running, get session/memory stats via direct connection
-    3. If API not configured or fails, fall back to direct connection only
+    3. If not running, return the reported state
 
     Uses light retry (3 attempts, ~7 seconds) for connection errors.
     """
+    from clickstream.utils.config import get_health_checker
+
+    health = get_health_checker()
+    status = health.check_service("valkey")
+
+    if not status.is_running:
+        return {
+            "status": status.state,
+            "active_sessions": None,
+            "memory": None,
+        }
+
+    # Service is running, get detailed stats via direct connection with retry
     valkey_status = "unreachable"
     valkey_active_sessions = None
     valkey_memory = None
 
-    # Try Aiven API first for quick status check
-    try:
-        from clickstream.utils.aiven import get_valkey_status
-
-        api_status = get_valkey_status(timeout=5)
-        if api_status:
-            state = api_status.get("state", "").upper()
-            if state != "RUNNING":
-                # Service exists but not running
-                return {
-                    "status": state.lower(),
-                    "active_sessions": None,
-                    "memory": None,
-                }
-            # Service is running, continue to get detailed stats
-    except Exception:
-        pass
-
-    # Get detailed stats via direct connection with retry
     try:
         valkey_active_sessions, valkey_memory = _valkey_connection_with_retry()
         valkey_status = "connected"
@@ -321,7 +305,7 @@ def _collect_postgresql_data(settings: Any, num_running: int) -> dict[str, Any]:
     """Collect PostgreSQL service status data.
 
     Strategy:
-    1. Try Aiven API first to check if service is running
+    1. Use ServiceHealthCheck to determine if service is running
     2. If running, check server reachability via 'postgres' database
     3. Then check if target database exists
     4. Then check if schema exists and get row counts
@@ -334,31 +318,24 @@ def _collect_postgresql_data(settings: Any, num_running: int) -> dict[str, Any]:
 
     Uses light retry (3 attempts, ~7 seconds) for connection errors.
     """
+    from clickstream.utils.config import get_health_checker
+
+    health = get_health_checker()
+    status = health.check_service("pg")
+
+    if not status.is_running:
+        return {
+            "status": status.state,
+            "events": None,
+            "sessions": None,
+            "rate": None,
+        }
+
+    # Service is running, get detailed stats via direct connection with retry
     pg_status = "unreachable"
     pg_events = None
     pg_sessions = None
     pg_rate = None
-
-    # Try Aiven API first for quick status check
-    try:
-        from clickstream.utils.aiven import get_postgres_status
-
-        api_status = get_postgres_status(timeout=5)
-        if api_status:
-            state = api_status.get("state", "").upper()
-            if state != "RUNNING":
-                # Service exists but not running
-                return {
-                    "status": state.lower(),
-                    "events": None,
-                    "sessions": None,
-                    "rate": None,
-                }
-            # Service is running, continue to get detailed stats
-    except Exception:
-        pass
-
-    # Get detailed stats via direct connection with retry
     try:
         pg_status, pg_events, pg_sessions = _postgresql_connection_with_retry(settings)
     except Exception:
@@ -445,71 +422,72 @@ def _collect_opensearch_data(settings: Any, os_consumer_running: bool) -> dict[s
     """Collect OpenSearch service status data.
 
     Strategy:
-    1. Try Aiven API first to check if service is running
+    1. Use ServiceHealthCheck to determine if service is running
     2. If running, get document counts via direct connection
-    3. If API not configured or fails, fall back to direct connection only
+    3. If not running, return the reported state
     """
-    opensearch_status = "disabled" if not settings.opensearch.enabled else "unreachable"
+    if not settings.opensearch.enabled:
+        return {
+            "status": "disabled",
+            "cluster": None,
+            "documents": None,
+            "rate": None,
+        }
+
+    from clickstream.utils.config import get_health_checker
+
+    health = get_health_checker()
+    status = health.check_service("opensearch")
+
+    if not status.is_running:
+        return {
+            "status": status.state,
+            "cluster": None,
+            "documents": None,
+            "rate": None,
+        }
+
+    # Service is running, get detailed stats via direct connection
+    opensearch_status = "unreachable"
     opensearch_cluster = None
     opensearch_documents = None
     opensearch_rate = None
 
-    if settings.opensearch.enabled:
-        # Try Aiven API first for quick status check
+    try:
+        from opensearchpy import OpenSearch
+
+        client = OpenSearch(
+            hosts=settings.opensearch.hosts,
+            http_auth=(settings.opensearch.user, settings.opensearch.password),
+            use_ssl=settings.opensearch.use_ssl,
+            verify_certs=settings.opensearch.verify_certs,
+            timeout=5,
+        )
+        info = client.info()
+        opensearch_cluster = info.get("cluster_name", "unknown")
+        opensearch_status = "connected"
+
+        index_name = settings.opensearch.events_index
+        if client.indices.exists(index=index_name):
+            stats = client.count(index=index_name)
+            opensearch_documents = stats.get("count", 0)
+    except Exception:
+        pass
+
+    # Get throughput stats
+    if opensearch_status == "connected" and opensearch_documents is not None:
         try:
-            from clickstream.utils.aiven import get_opensearch_status
-
-            api_status = get_opensearch_status(timeout=5)
-            if api_status:
-                state = api_status.get("state", "").upper()
-                if state != "RUNNING":
-                    # Service exists but not running
-                    return {
-                        "status": state.lower(),
-                        "cluster": None,
-                        "documents": None,
-                        "rate": None,
-                    }
-                # Service is running, continue to get detailed stats
-        except Exception:
-            pass
-
-        # Get detailed stats via direct connection
-        try:
-            from opensearchpy import OpenSearch
-
-            client = OpenSearch(
-                hosts=settings.opensearch.hosts,
-                http_auth=(settings.opensearch.user, settings.opensearch.password),
-                use_ssl=settings.opensearch.use_ssl,
-                verify_certs=settings.opensearch.verify_certs,
-                timeout=5,
+            from clickstream.utils.session_state import (
+                get_throughput_stats,
+                record_stats_sample,
             )
-            info = client.info()
-            opensearch_cluster = info.get("cluster_name", "unknown")
-            opensearch_status = "connected"
 
-            index_name = settings.opensearch.events_index
-            if client.indices.exists(index=index_name):
-                stats = client.count(index=index_name)
-                opensearch_documents = stats.get("count", 0)
+            record_stats_sample("opensearch", opensearch_documents)
+            stats = get_throughput_stats("opensearch")
+            if stats and stats.get("current_rate") is not None and os_consumer_running:
+                opensearch_rate = stats["current_rate"]
         except Exception:
             pass
-
-        # Get throughput stats
-        if opensearch_status == "connected" and opensearch_documents is not None:
-            try:
-                from clickstream.utils.session_state import (
-                    get_throughput_stats,
-                    record_stats_sample,
-                )
-
-                record_stats_sample("opensearch", opensearch_documents)
-                stats = get_throughput_stats("opensearch")
-                if stats and stats.get("current_rate") is not None and os_consumer_running:
-                    opensearch_rate = stats["current_rate"]
-            except Exception:
-                pass
 
     return {
         "status": opensearch_status,
@@ -599,307 +577,6 @@ def _collect_status_data_parallel() -> dict[str, Any]:
             "opensearch": results["opensearch"],
         },
     }
-
-
-# ==============================================================================
-# Data Collection - Legacy Sequential (kept for reference)
-# ==============================================================================
-
-
-def _collect_status_data() -> dict[str, Any]:
-    """
-    Collect all status data and return as a dictionary.
-
-    Returns:
-        Dictionary containing all pipeline status information
-    """
-    settings = get_settings()
-    data: dict[str, Any] = {
-        "producer": {},
-        "consumers": {
-            "postgresql": {},
-            "opensearch": {},
-        },
-        "services": {
-            "kafka": {},
-            "valkey": {},
-            "postgresql": {},
-            "opensearch": {},
-        },
-    }
-
-    # ── Producer ──────────────────────────────────────────
-    producer_running = is_process_running(PRODUCER_PID_FILE)
-    producer_pid = get_process_pid(PRODUCER_PID_FILE) if producer_running else None
-    producer_start_time = get_process_start_time(producer_pid) if producer_pid else None
-    producer_last_run = get_process_end_time(PRODUCER_LOG_FILE) if not producer_running else None
-
-    producer_messages = None
-    try:
-        from clickstream.utils.session_state import get_producer_messages
-
-        messages = get_producer_messages()
-        if messages > 0:
-            producer_messages = messages
-    except Exception:
-        pass
-
-    data["producer"] = {
-        "running": producer_running,
-        "pid": producer_pid,
-        "start_time": producer_start_time,
-        "last_run": producer_last_run,
-        "messages_produced": producer_messages,
-    }
-
-    # ── PostgreSQL Consumers ──────────────────────────────
-    running_consumers = get_all_consumer_pids()
-    num_running = len(running_consumers)
-    pg_consumer_start_time = None
-    pg_consumer_last_run = None
-
-    if num_running > 0:
-        first_pid = running_consumers[0][1]
-        pg_consumer_start_time = get_process_start_time(first_pid)
-    else:
-        # Check for last run time
-        for i in range(4):
-            log_file = get_consumer_log_file(i, "postgresql")
-            if log_file.exists():
-                pg_consumer_last_run = get_process_end_time(log_file)
-                if pg_consumer_last_run:
-                    break
-
-    data["consumers"]["postgresql"] = {
-        "running": num_running > 0,
-        "instances": num_running,
-        "pids": [pid for _, pid in running_consumers],
-        "start_time": pg_consumer_start_time,
-        "last_run": pg_consumer_last_run,
-    }
-
-    # ── OpenSearch Consumer ──────────────────────────────
-    os_enabled = settings.opensearch.enabled
-    os_consumer_running = is_opensearch_consumer_running() if os_enabled else False
-    os_consumer_pid = None
-    os_consumer_start_time = None
-    os_consumer_last_run = None
-
-    if os_enabled:
-        instance = get_opensearch_instance()
-        os_pid_file = get_consumer_pid_file(instance, "opensearch")
-        os_log_file = get_consumer_log_file(instance, "opensearch")
-
-        if os_consumer_running:
-            os_consumer_pid = get_process_pid(os_pid_file)
-            os_consumer_start_time = get_process_start_time(os_consumer_pid)
-        else:
-            os_consumer_last_run = get_process_end_time(os_log_file)
-
-    data["consumers"]["opensearch"] = {
-        "enabled": os_enabled,
-        "running": os_consumer_running,
-        "pid": os_consumer_pid,
-        "start_time": os_consumer_start_time,
-        "last_run": os_consumer_last_run,
-    }
-
-    # ── Kafka Service ──────────────────────────────────────
-    kafka_status = "unreachable"
-    kafka_topics: list[dict[str, Any]] = []
-
-    try:
-        from kafka import KafkaAdminClient, KafkaConsumer, TopicPartition
-
-        kafka_config = get_kafka_config(timeout_ms=30000)
-
-        admin = KafkaAdminClient(**kafka_config)
-        topic_names = [
-            t for t in admin.list_topics() if not t.startswith("__") and "__assignor" not in t
-        ]
-        admin.close()
-
-        if topic_names:
-            consumer = KafkaConsumer(**kafka_config)
-            for topic in topic_names:
-                try:
-                    partitions = consumer.partitions_for_topic(topic)
-                    if partitions:
-                        topic_partitions = [TopicPartition(topic, p) for p in partitions]
-                        end_offsets = consumer.end_offsets(topic_partitions)
-                        total_messages = sum(end_offsets.values())
-                        kafka_topics.append({"name": topic, "messages": total_messages})
-                except Exception:
-                    kafka_topics.append({"name": topic, "messages": None})
-            consumer.close()
-
-        kafka_status = "connected"
-    except Exception:
-        pass
-
-    data["services"]["kafka"] = {
-        "status": kafka_status,
-        "topics": kafka_topics,
-    }
-
-    # ── Valkey Service ──────────────────────────────────────
-    valkey_status = "unreachable"
-    valkey_active_sessions = None
-    valkey_memory = None
-
-    try:
-        from clickstream.utils.session_state import check_valkey_connection, get_valkey_client
-
-        if check_valkey_connection():
-            valkey_status = "connected"
-            try:
-                client = get_valkey_client()
-                valkey_active_sessions = 0
-                for _ in client.scan_iter("session:meta:*", count=1000):
-                    valkey_active_sessions += 1
-                info = client.info("memory")
-                valkey_memory = info.get("used_memory_human", None)
-                # Normalize memory format
-                if valkey_memory and valkey_memory[-1] in ("K", "M", "G"):
-                    valkey_memory = valkey_memory[:-1] + " " + valkey_memory[-1] + "B"
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-    data["services"]["valkey"] = {
-        "status": valkey_status,
-        "active_sessions": valkey_active_sessions,
-        "memory": valkey_memory,
-    }
-
-    # ── PostgreSQL Service ──────────────────────────────────
-    pg_status = "unreachable"
-    pg_events = None
-    pg_sessions = None
-    pg_rate = None
-
-    try:
-        import psycopg2
-
-        # Step 1: Check if server is reachable by connecting to 'postgres' database
-        server_conn_string = (
-            f"postgresql://{settings.postgres.user}:{settings.postgres.password}@"
-            f"{settings.postgres.host}:{settings.postgres.port}/postgres"
-            f"?sslmode={settings.postgres.sslmode}"
-        )
-        with psycopg2.connect(server_conn_string, connect_timeout=5) as conn:
-            with conn.cursor() as cur:
-                # Step 2: Check if target database exists
-                cur.execute(
-                    "SELECT 1 FROM pg_database WHERE datname = %s",
-                    (settings.postgres.database,),
-                )
-                if not cur.fetchone():
-                    pg_status = "no_database"
-
-        # Step 3: Database exists, connect to it and check schema
-        if pg_status != "no_database":
-            with psycopg2.connect(settings.postgres.connection_string, connect_timeout=5) as conn:
-                with conn.cursor() as cur:
-                    schema_name = settings.postgres.schema_name
-                    cur.execute(
-                        """
-                        SELECT EXISTS (
-                            SELECT FROM information_schema.tables 
-                            WHERE table_schema = %s 
-                            AND table_name = 'events'
-                        )
-                        """,
-                        (schema_name,),
-                    )
-                    result = cur.fetchone()
-                    schema_exists = result[0] if result else False
-
-                    if schema_exists:
-                        cur.execute(f"SELECT COUNT(*) FROM {schema_name}.events")
-                        result = cur.fetchone()
-                        pg_events = result[0] if result else 0
-
-                        cur.execute(f"SELECT COUNT(*) FROM {schema_name}.sessions")
-                        result = cur.fetchone()
-                        pg_sessions = result[0] if result else 0
-                        pg_status = "connected"
-                    else:
-                        pg_status = "no_schema"
-    except Exception:
-        pass
-
-    # Get throughput stats
-    if pg_status == "connected" and pg_events is not None and pg_sessions is not None:
-        try:
-            from clickstream.utils.session_state import get_throughput_stats, record_stats_sample
-
-            record_stats_sample("postgresql", pg_events, pg_sessions)
-            stats = get_throughput_stats("postgresql")
-            if stats and stats.get("current_rate") is not None and num_running > 0:
-                pg_rate = stats["current_rate"]
-        except Exception:
-            pass
-
-    data["services"]["postgresql"] = {
-        "status": pg_status,
-        "events": pg_events,
-        "sessions": pg_sessions,
-        "rate": pg_rate,
-    }
-
-    # ── OpenSearch Service ──────────────────────────────────
-    opensearch_status = "disabled" if not settings.opensearch.enabled else "unreachable"
-    opensearch_cluster = None
-    opensearch_documents = None
-    opensearch_rate = None
-
-    if settings.opensearch.enabled:
-        try:
-            from opensearchpy import OpenSearch
-
-            client = OpenSearch(
-                hosts=settings.opensearch.hosts,
-                http_auth=(settings.opensearch.user, settings.opensearch.password),
-                use_ssl=settings.opensearch.use_ssl,
-                verify_certs=settings.opensearch.verify_certs,
-                timeout=5,
-            )
-            info = client.info()
-            opensearch_cluster = info.get("cluster_name", "unknown")
-            opensearch_status = "connected"
-
-            index_name = settings.opensearch.events_index
-            if client.indices.exists(index=index_name):
-                stats = client.count(index=index_name)
-                opensearch_documents = stats.get("count", 0)
-        except Exception:
-            pass
-
-        # Get throughput stats
-        if opensearch_status == "connected" and opensearch_documents is not None:
-            try:
-                from clickstream.utils.session_state import (
-                    get_throughput_stats,
-                    record_stats_sample,
-                )
-
-                record_stats_sample("opensearch", opensearch_documents)
-                stats = get_throughput_stats("opensearch")
-                if stats and stats.get("current_rate") is not None and os_consumer_running:
-                    opensearch_rate = stats["current_rate"]
-            except Exception:
-                pass
-
-    data["services"]["opensearch"] = {
-        "status": opensearch_status,
-        "cluster": opensearch_cluster,
-        "documents": opensearch_documents,
-        "rate": opensearch_rate,
-    }
-
-    return data
 
 
 # ==============================================================================

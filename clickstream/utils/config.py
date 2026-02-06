@@ -10,7 +10,10 @@ All configuration is loaded from environment variables, with support for
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal, Optional
+from typing import TYPE_CHECKING, Literal, Optional
+
+if TYPE_CHECKING:
+    from clickstream.base.service_health import ServiceHealthCheck
 
 from dotenv import load_dotenv
 from pydantic import Field
@@ -318,3 +321,30 @@ def get_settings() -> Settings:
     Settings are loaded once and cached for subsequent calls.
     """
     return Settings()
+
+
+def get_health_checker(settings: Settings | None = None) -> "ServiceHealthCheck":
+    """
+    Create the appropriate health checker for the current environment.
+
+    Returns AivenHealthCheck for Aiven environments (uses REST API),
+    LocalHealthCheck for local/Docker environments (uses direct connections).
+
+    Args:
+        settings: Application settings. If None, uses get_settings().
+
+    Returns:
+        ServiceHealthCheck implementation for the detected environment.
+    """
+    if settings is None:
+        settings = get_settings()
+
+    env = settings.detect_environment()
+    if env == "aiven" and settings.aiven.is_configured:
+        from clickstream.utils.services.aiven import AivenHealthCheck
+
+        return AivenHealthCheck(settings)
+    else:
+        from clickstream.utils.services.local import LocalHealthCheck
+
+        return LocalHealthCheck()
