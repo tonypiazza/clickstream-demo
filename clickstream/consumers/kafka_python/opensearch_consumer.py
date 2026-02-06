@@ -104,6 +104,7 @@ def run() -> None:
         auto_offset_reset=consumer_settings.auto_offset_reset,
         enable_auto_commit=False,  # Manual commits after batch
         value_deserializer=lambda v: json.loads(v.decode("utf-8")),
+        api_version=(2, 6, 0),  # Skip auto-detection for faster/more reliable startup
     )
 
     # Initialize OpenSearch repository

@@ -237,7 +237,7 @@ class QuixProducer(StreamingProducer):
 
     @property
     def name(self) -> str:
-        return "quixstreams"
+        return "quix-streams"
 
     @property
     def version(self) -> str:

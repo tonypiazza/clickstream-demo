@@ -618,6 +618,16 @@ def _format_abbreviated(value: int) -> str:
         return str(value)
 
 
+def _format_duration(seconds: int) -> str:
+    """Format seconds as 'Xm Ys' or 'Ys' for durations under 60s."""
+    if seconds >= 60:
+        minutes = seconds // 60
+        secs = seconds % 60
+        return f"{minutes}m {secs:02d}s"
+    else:
+        return f"{seconds}s"
+
+
 def benchmark_show(
     file: Annotated[Path, typer.Option("--file", "-f", help="Benchmark results CSV file")] = Path(
         "benchmark_results.csv"
@@ -719,8 +729,13 @@ def benchmark_show(
         ("partitions", "Parts", "right", lambda v: v or ""),
         ("events_produced", "Produced", "right", lambda v: f"{int(v):,}" if v else ""),
         ("events_consumed", "Consumed", "right", lambda v: f"{int(v):,}" if v else ""),
-        ("duration_sec", "Duration", "right", lambda v: f"{v}s" if v else ""),
-        ("throughput_events_sec", "Throughput", "right", lambda v: f"{int(v):,}/s" if v else ""),
+        ("duration_sec", "Duration", "right", lambda v: _format_duration(int(v)) if v else ""),
+        (
+            "throughput_events_sec",
+            "Throughput",
+            "right",
+            lambda v: f"{_format_abbreviated(int(v))}/s" if v else "",
+        ),
         # Optional network columns
         ("kafka_latency_ms", "Kafka", "right", lambda v: f"{v} ms" if v else ""),
         ("pg_latency_ms", "PG", "right", lambda v: f"{v} ms" if v else ""),

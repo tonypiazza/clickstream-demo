@@ -29,7 +29,7 @@ class StreamingProducer(ABC):
 
         Examples:
             'kafka-python'
-            'quixstreams'
+            'quix-streams'
             'confluent-kafka'
         """
         pass

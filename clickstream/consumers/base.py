@@ -58,9 +58,9 @@ class StreamingConsumer(ABC):
 
         Examples:
             'kafka-python'
-            'Quix Streams'
-            'Mage AI'
-            'Bytewax'
+            'quix-streams'
+            'mage-ai'
+            'bytewax'
         """
         pass
 
