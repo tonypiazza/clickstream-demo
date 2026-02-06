@@ -237,21 +237,9 @@ class PostgreSQLSessionRepository(SessionRepository):
                     view_count = EXCLUDED.view_count,
                     cart_count = EXCLUDED.cart_count,
                     transaction_count = EXCLUDED.transaction_count,
-                    items_viewed = (
-                        SELECT ARRAY(SELECT DISTINCT unnest(
-                            {self._schema}.sessions.items_viewed || EXCLUDED.items_viewed
-                        ))
-                    ),
-                    items_carted = (
-                        SELECT ARRAY(SELECT DISTINCT unnest(
-                            {self._schema}.sessions.items_carted || EXCLUDED.items_carted
-                        ))
-                    ),
-                    items_purchased = (
-                        SELECT ARRAY(SELECT DISTINCT unnest(
-                            {self._schema}.sessions.items_purchased || EXCLUDED.items_purchased
-                        ))
-                    ),
+                    items_viewed = EXCLUDED.items_viewed,
+                    items_carted = EXCLUDED.items_carted,
+                    items_purchased = EXCLUDED.items_purchased,
                     converted = EXCLUDED.converted
                 """,
                 sessions,

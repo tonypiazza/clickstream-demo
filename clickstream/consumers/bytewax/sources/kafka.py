@@ -154,8 +154,10 @@ class _KafkaSourcePartitionWithCommit(StatefulSourcePartition[KafkaSourceMessage
         if self._eof:
             raise StopIteration()
 
+        # Consume messages from Kafka
         msgs = self._consumer.consume(self._batch_size, timeout=self._poll_timeout)
 
+        # Construct KafkaSourceMessage objects
         batch: List[KafkaSourceMessage] = []
         last_offset = None
 
@@ -191,7 +193,7 @@ class _KafkaSourcePartitionWithCommit(StatefulSourcePartition[KafkaSourceMessage
             batch.append(kafka_msg)
             last_offset = msg.offset()
 
-        # Commit offsets after processing batch
+        # Commit offsets
         if last_offset is not None:
             self._offset = last_offset + 1
             try:
