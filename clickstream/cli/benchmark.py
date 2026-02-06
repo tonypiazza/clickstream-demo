@@ -265,6 +265,13 @@ def benchmark_run(
     offset: Annotated[
         int, typer.Option("--offset", help="Number of rows to skip in CSV (0 = start at row 1)")
     ] = 0,
+    impl: Annotated[
+        Optional[str],
+        typer.Option(
+            "--consumer-impl",
+            help="Override consumer implementation (confluent, kafka_python, quix, mage, bytewax)",
+        ),
+    ] = None,
 ) -> None:
     """Run a benchmark measuring consumer throughput.
 
@@ -280,6 +287,7 @@ def benchmark_run(
         clickstream benchmark run --limit 100000 --runs 5 -y               # 5 runs for averaging
         clickstream benchmark run --limit 100000 --increment 50000 --runs 5 -y  # Incremental
         clickstream benchmark run --offset 10000 --limit 5000 -y           # Skip first 10000 rows
+        clickstream benchmark run --limit 100000 --consumer-impl quix -y    # Use specific consumer
     """
     from clickstream.utils.db import reset_schema
     from clickstream.utils.session_state import check_valkey_connection, get_valkey_client
@@ -309,6 +317,35 @@ def benchmark_run(
     if limit is None and increment > 0:
         print(f"{C.BRIGHT_RED}{I.CROSS} --increment requires --limit{C.RESET}")
         raise typer.Exit(1)
+
+    # Validate --impl option
+    valid_impls = ["confluent", "kafka_python", "quix", "mage", "bytewax"]
+    impl_packages = {
+        "confluent": "confluent-kafka",
+        "kafka_python": "kafka-python",
+        "quix": "quixstreams",
+        "mage": "mage-ai",
+        "bytewax": "bytewax",
+    }
+    if impl is not None:
+        if impl not in valid_impls:
+            print(
+                f"{C.BRIGHT_RED}{I.CROSS} Invalid --impl value: {impl}. "
+                f"Valid options: {', '.join(valid_impls)}{C.RESET}"
+            )
+            raise typer.Exit(1)
+        # Check that the package is installed
+        from importlib.metadata import PackageNotFoundError, version as pkg_version
+
+        package_name = impl_packages[impl]
+        try:
+            pkg_version(package_name)
+        except PackageNotFoundError:
+            print(
+                f"{C.BRIGHT_RED}{I.CROSS} Package '{package_name}' is not installed. "
+                f"Install it to use --impl {impl}{C.RESET}"
+            )
+            raise typer.Exit(1)
 
     # Count CSV rows once for validation
     events_file = get_project_root() / "data" / "events.csv"
@@ -343,13 +380,43 @@ def benchmark_run(
 
     settings = get_settings()
     partitions = settings.kafka.events_topic_partitions
-    consumer = get_consumer("postgresql")
-    num_instances = consumer.num_instances
+
+    # Determine effective consumer impl (override or default)
+    effective_impl = impl if impl is not None else settings.consumer.impl
+
+    # Get consumer with the effective impl
+    # Note: We need to temporarily set the env var for get_consumer to pick it up
+    import os
+
+    from clickstream.utils.config import get_settings as _get_settings
+
+    original_impl = os.environ.get("CONSUMER_IMPL")
+    if impl is not None:
+        os.environ["CONSUMER_IMPL"] = impl
+        # Clear the settings cache to pick up the new value
+        _get_settings.cache_clear()
+
+    try:
+        consumer = get_consumer("postgresql")
+        num_instances = consumer.num_instances
+    finally:
+        # Restore original env var
+        if impl is not None:
+            if original_impl is not None:
+                os.environ["CONSUMER_IMPL"] = original_impl
+            else:
+                os.environ.pop("CONSUMER_IMPL", None)
+            _get_settings.cache_clear()
 
     # Configuration display
     _print()
     _print(f"  {C.BOLD}Benchmark Configuration{C.RESET}")
-    _print(f"  • Consumer Impl:        {C.WHITE}{settings.consumer.impl}{C.RESET}")
+    if impl is not None:
+        _print(
+            f"  • Consumer Impl:        {C.WHITE}{effective_impl}{C.RESET} {C.BRIGHT_YELLOW}(override){C.RESET}"
+        )
+    else:
+        _print(f"  • Consumer Impl:        {C.WHITE}{effective_impl}{C.RESET}")
     _print(f"  • Partitions:           {C.WHITE}{partitions}{C.RESET}")
     _print(f"  • Consumers:            {C.WHITE}{consumer.parallelism_description}{C.RESET}")
     if offset > 0:
@@ -469,7 +536,9 @@ def benchmark_run(
             runner_script = project_root / "clickstream" / "consumer_runner.py"
 
             for i in range(num_instances):
-                start_consumer_instance(runner_script, i, project_root, benchmark_mode=True)
+                start_consumer_instance(
+                    runner_script, i, project_root, benchmark_mode=True, impl_override=impl
+                )
                 if i < num_instances - 1:
                     time.sleep(1)
 

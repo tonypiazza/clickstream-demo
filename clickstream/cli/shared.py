@@ -406,6 +406,7 @@ def start_consumer_instance(
     instance: int,
     project_root: Path,
     benchmark_mode: bool = False,
+    impl_override: Optional[str] = None,
 ) -> bool:
     """Start a single PostgreSQL consumer instance. Returns True if started successfully.
 
@@ -414,6 +415,7 @@ def start_consumer_instance(
         instance: Instance number (0-indexed)
         project_root: Path to project root
         benchmark_mode: If True, set CONSUMER_BENCHMARK_MODE=true for EOF exit
+        impl_override: If provided, override the CONSUMER_IMPL environment variable
     """
     pid_file = get_consumer_pid_file(instance, "postgresql")
     log_file = get_consumer_log_file(instance, "postgresql")
@@ -425,6 +427,10 @@ def start_consumer_instance(
     # Set benchmark mode environment variable
     if benchmark_mode:
         env["CONSUMER_BENCHMARK_MODE"] = "true"
+
+    # Override consumer implementation if specified
+    if impl_override:
+        env["CONSUMER_IMPL"] = impl_override
 
     # Redirect stdout/stderr to devnull - the runner handles logging to file
     with open(os.devnull, "w") as devnull:
