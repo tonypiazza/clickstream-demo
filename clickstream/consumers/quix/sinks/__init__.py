@@ -6,21 +6,10 @@ Provides BatchingSink implementations for:
 - OpenSearch (events index)
 """
 
-from clickstream.consumers.quix.sinks.opensearch import OpenSearchEventSink, OpenSearchEventsSink
-from clickstream.consumers.quix.sinks.postgresql import (
-    PostgreSQLEventSink,
-    PostgreSQLEventsSink,
-    PostgreSQLSessionSink,
-    PostgreSQLSessionsSink,
-)
+from clickstream.consumers.quix.sinks.opensearch import OpenSearchEventSink
+from clickstream.consumers.quix.sinks.postgresql import PostgreSQLSink
 
 __all__ = [
-    # New singular names (preferred)
-    "PostgreSQLEventSink",
-    "PostgreSQLSessionSink",
     "OpenSearchEventSink",
-    # Deprecated plural names (backward compatibility)
-    "PostgreSQLEventsSink",
-    "PostgreSQLSessionsSink",
-    "OpenSearchEventsSink",
+    "PostgreSQLSink",
 ]

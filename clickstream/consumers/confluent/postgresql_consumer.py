@@ -22,7 +22,9 @@ Uses:
 import json
 import logging
 import signal
+import time
 
+from clickstream.consumers.batch_processor import BatchMetrics
 from clickstream.utils.config import get_settings
 from clickstream.utils.paths import get_project_root
 
@@ -174,6 +176,42 @@ def run() -> None:
         ttl_hours=settings.valkey.session_ttl_hours,
     )
 
+    # Consumer lag logging callback for periodic summaries
+    def _log_consumer_lag():
+        """Log consumer lag for all assigned partitions."""
+        if not assigned_partitions:
+            return
+        from confluent_kafka import TopicPartition as _TP
+
+        parts = []
+        total_lag = 0
+        for topic_name, part_idx in sorted(assigned_partitions):
+            try:
+                tp = _TP(topic_name, part_idx)
+                _, high = consumer.get_watermark_offsets(tp, timeout=5.0)
+                pos = consumer.position([tp])
+                if pos and pos[0].offset >= 0:
+                    lag = max(0, high - pos[0].offset)
+                else:
+                    lag = -1
+            except Exception:
+                lag = -1
+            if lag >= 0:
+                parts.append(f"p{part_idx}={lag:,}")
+                total_lag += lag
+            else:
+                parts.append(f"p{part_idx}=?")
+        logger.info("Consumer lag: %s | total=%s", " ".join(parts), f"{total_lag:,}")
+
+    # Initialize batch metrics with lag callback
+    batch_metrics = BatchMetrics(
+        event_repo,
+        session_state,
+        session_repo,
+        on_summary=_log_consumer_lag,
+        log=logger,
+    )
+
     # Track EOF partitions for benchmark mode
     eof_partitions: set[tuple[str, int]] = set()
     assigned_partitions: set[tuple[str, int]] = set()
@@ -247,10 +285,12 @@ def run() -> None:
         while not _shutdown_requested:
             # Use consume() batch API - more efficient than poll()
             # Returns list of messages directly (not dict of partition -> messages)
+            t_poll_start = time.monotonic()
             messages = consumer.consume(
                 num_messages=10000,  # Larger batch for better throughput
                 timeout=consumer_settings.poll_timeout_ms / 1000.0,  # Convert to seconds
             )
+            poll_ms = (time.monotonic() - t_poll_start) * 1000
 
             if not messages:
                 # In benchmark mode, check if all assigned partitions have reached EOF
@@ -295,10 +335,7 @@ def run() -> None:
                 # Process any remaining events before exiting
                 if events:
                     try:
-                        event_repo.save(events)
-                        updated_sessions = session_state.batch_update_sessions(events)
-                        session_records = [session_state.to_db_record(s) for s in updated_sessions]
-                        session_repo.save(session_records)
+                        batch_metrics.process_batch(events)
                         consumer.commit()
                     except Exception as e:
                         logger.error("Error processing final batch: %s", e)
@@ -309,24 +346,17 @@ def run() -> None:
                 continue
 
             try:
-                # 1. Save events to PostgreSQL
-                event_repo.save(events)
+                # Log poll timing when batch is non-empty
+                logger.info("Poll: %.0fms (%s messages)", poll_ms, f"{len(messages):,}")
 
-                # 2. Update sessions in Valkey (batch operation - 2 round-trips)
-                updated_sessions = session_state.batch_update_sessions(events)
+                # Process batch with instrumented 3-step pipeline
+                batch_metrics.process_batch(events)
 
-                # 3. Convert and save sessions to PostgreSQL
-                session_records = [session_state.to_db_record(s) for s in updated_sessions]
-                session_repo.save(session_records)
-
-                # 4. Commit offsets
+                # Commit offsets (timed)
+                t_commit = time.monotonic()
                 consumer.commit()
-
-                logger.debug(
-                    "Processed batch: %d events, %d sessions",
-                    len(events),
-                    len(session_records),
-                )
+                commit_ms = (time.monotonic() - t_commit) * 1000
+                logger.info("Commit: %.0fms", commit_ms)
 
             except Exception as e:
                 logger.error("Error processing batch: %s", e)
@@ -348,6 +378,7 @@ def run() -> None:
         raise
 
     finally:
+        batch_metrics.log_final_summary()
         consumer.close()
         event_repo.close()
         session_repo.close()

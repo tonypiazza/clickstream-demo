@@ -57,7 +57,3 @@ class OpenSearchEventSink(BatchingSink):
     def cleanup(self):
         """Called when the sink is being shut down."""
         self._repo.close()
-
-
-# Backward compatibility alias (deprecated)
-OpenSearchEventsSink = OpenSearchEventSink

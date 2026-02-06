@@ -18,6 +18,7 @@ Key differences from Bytewax's built-in KafkaSource:
 """
 
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -131,6 +132,8 @@ class _KafkaSourcePartitionWithCommit(StatefulSourcePartition[KafkaSourceMessage
         self._poll_timeout = poll_timeout
         self._eof = False
         self._step_id = step_id
+        self._last_lag_log_time = time.monotonic()
+        self._lag_interval = 30.0
 
         logger.debug(
             "Initialized Kafka partition %s-%d at offset %s",
@@ -210,6 +213,26 @@ class _KafkaSourcePartitionWithCommit(StatefulSourcePartition[KafkaSourceMessage
                     e,
                 )
                 raise
+
+        # Periodic consumer lag logging
+        now = time.monotonic()
+        if now - self._last_lag_log_time >= self._lag_interval:
+            try:
+                _, high = self._consumer.get_watermark_offsets(
+                    TopicPartition(self._topic, self._part_idx), timeout=5.0
+                )
+                lag = max(0, high - self._offset)
+                logger.info(
+                    "Consumer lag: %s-%d: %s (offset=%s, high=%s)",
+                    self._topic,
+                    self._part_idx,
+                    f"{lag:,}",
+                    f"{self._offset:,}",
+                    f"{high:,}",
+                )
+            except Exception as e:
+                logger.debug("Failed to get watermark offsets: %s", e)
+            self._last_lag_log_time = now
 
         return batch
 

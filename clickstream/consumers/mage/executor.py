@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import signal
+import time
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -148,6 +149,7 @@ def _run_postgresql_consumer(settings) -> None:
     global _shutdown_requested
 
     from confluent_kafka import Consumer, KafkaError, TopicPartition
+    from clickstream.consumers.batch_processor import BatchMetrics
     from clickstream.infrastructure.repositories.postgresql import (
         PostgreSQLEventRepository,
         PostgreSQLSessionRepository,
@@ -271,6 +273,40 @@ def _run_postgresql_consumer(settings) -> None:
         ttl_hours=settings.valkey.session_ttl_hours,
     )
 
+    # Consumer lag logging callback for periodic summaries
+    def _log_consumer_lag():
+        """Log consumer lag for all assigned partitions."""
+        if not assigned_partitions:
+            return
+        parts = []
+        total_lag = 0
+        for topic_name, part_idx in sorted(assigned_partitions):
+            try:
+                tp = TopicPartition(topic_name, part_idx)
+                _, high = consumer.get_watermark_offsets(tp, timeout=5.0)
+                pos = consumer.position([tp])
+                if pos and pos[0].offset >= 0:
+                    lag = max(0, high - pos[0].offset)
+                else:
+                    lag = -1
+            except Exception:
+                lag = -1
+            if lag >= 0:
+                parts.append(f"p{part_idx}={lag:,}")
+                total_lag += lag
+            else:
+                parts.append(f"p{part_idx}=?")
+        logger.info("Consumer lag: %s | total=%s", " ".join(parts), f"{total_lag:,}")
+
+    # Initialize batch metrics with lag callback
+    batch_metrics = BatchMetrics(
+        event_repo,
+        session_state,
+        session_repo,
+        on_summary=_log_consumer_lag,
+        log=logger,
+    )
+
     logger.info("Starting PostgreSQL consumer (Mage AI)...")
     logger.info("Consumer group: %s", group_id)
     logger.info("Topic: %s", topic)
@@ -284,10 +320,12 @@ def _run_postgresql_consumer(settings) -> None:
     try:
         while not _shutdown_requested:
             # Consume messages
+            t_poll_start = time.monotonic()
             messages = consumer.consume(
                 num_messages=batch_size,
                 timeout=poll_timeout,
             )
+            poll_ms = (time.monotonic() - t_poll_start) * 1000
 
             if not messages:
                 # Check if all assigned partitions have reached EOF
@@ -355,24 +393,17 @@ def _run_postgresql_consumer(settings) -> None:
                 continue
 
             try:
-                # 1. Save events to PostgreSQL
-                event_repo.save(events)
+                # Log poll timing when batch is non-empty
+                logger.info("Poll: %.0fms (%s messages)", poll_ms, f"{len(messages):,}")
 
-                # 2. Update sessions in Valkey (batch operation)
-                updated_sessions = session_state.batch_update_sessions(events)
+                # Process batch with instrumented 3-step pipeline
+                batch_metrics.process_batch(events)
 
-                # 3. Convert and save sessions to PostgreSQL
-                session_records = [session_state.to_db_record(s) for s in updated_sessions]
-                session_repo.save(session_records)
-
-                # 4. Commit offsets
+                # Commit offsets (timed)
+                t_commit = time.monotonic()
                 consumer.commit()
-
-                logger.debug(
-                    "Processed batch: %d events, %d sessions",
-                    len(events),
-                    len(session_records),
-                )
+                commit_ms = (time.monotonic() - t_commit) * 1000
+                logger.info("Commit: %.0fms", commit_ms)
 
             except Exception as e:
                 logger.error("Error processing batch: %s", e)
@@ -388,6 +419,7 @@ def _run_postgresql_consumer(settings) -> None:
                     raise
 
     finally:
+        batch_metrics.log_final_summary()
         consumer.close()
         event_repo.close()
         session_repo.close()

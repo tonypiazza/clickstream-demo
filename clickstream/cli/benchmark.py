@@ -8,6 +8,7 @@ Measures consumer throughput from Kafka to PostgreSQL.
 """
 
 import csv
+import logging
 import os
 import re
 import subprocess
@@ -15,7 +16,7 @@ import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Any, Optional
 
 import typer
 from rich.console import Console
@@ -39,6 +40,8 @@ from clickstream.cli.shared import (
 from clickstream.consumers import get_consumer
 from clickstream.utils.config import get_settings
 
+logger = logging.getLogger(__name__)
+
 
 # ==============================================================================
 # Helper Functions
@@ -59,28 +62,105 @@ def _get_csv_row_count(filepath: Path) -> int:
         return sum(1 for _ in f) - 1
 
 
-def _get_pg_event_count() -> int:
-    """Get current event count from PostgreSQL."""
-    settings = get_settings()
-    try:
-        import psycopg2
+class PgCounter:
+    """Persistent PostgreSQL connection for counting events during benchmark.
 
-        conn = psycopg2.connect(
-            host=settings.postgres.host,
-            port=settings.postgres.port,
-            user=settings.postgres.user,
-            password=settings.postgres.password,
-            dbname=settings.postgres.database,
-            sslmode=settings.postgres.sslmode,
+    Maintains a single connection across multiple count() calls, avoiding
+    the overhead and connection-leak risk of opening a new connection every
+    second.  Automatically reconnects on transient errors and logs all
+    failures instead of silently returning 0.
+
+    Usage::
+
+        with PgCounter() as pg:
+            count = pg.count()          # fast: reuses connection
+            count = pg.count(retries=3) # retry on failure
+    """
+
+    CONNECT_TIMEOUT = 10  # seconds – matches consumer repositories
+
+    def __init__(self) -> None:
+        import psycopg2  # noqa: F811 – keep import local so module loads without psycopg2
+
+        self._psycopg2 = psycopg2
+        self._settings = get_settings()
+        self._conn: Any = None  # psycopg2 connection
+        self._schema = self._settings.postgres.schema_name
+
+    # -- context manager --------------------------------------------------
+
+    def __enter__(self) -> "PgCounter":
+        self._connect()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:  # type: ignore[no-untyped-def]
+        self.close()
+        return None
+
+    # -- public API -------------------------------------------------------
+
+    def count(self, *, retries: int = 0) -> int:
+        """Return the current event count from PostgreSQL.
+
+        Args:
+            retries: Number of extra attempts after the first failure.
+                     Each retry will reconnect before querying.
+
+        Returns:
+            Event count, or -1 if all attempts fail (never silently returns 0).
+        """
+        last_err: Exception | None = None
+        for attempt in range(1 + retries):
+            try:
+                if self._conn is None or self._conn.closed:
+                    self._connect()
+                with self._conn.cursor() as cur:  # type: ignore[union-attr]
+                    cur.execute(f"SELECT COUNT(*) FROM {self._schema}.events")
+                    result = cur.fetchone()
+                    return result[0] if result else 0
+            except Exception as exc:
+                last_err = exc
+                logger.warning(
+                    "PgCounter.count() attempt %d/%d failed: %s",
+                    attempt + 1,
+                    1 + retries,
+                    exc,
+                )
+                # Reconnect before next attempt
+                self._safe_close()
+
+        logger.error("PgCounter.count() failed after %d attempt(s): %s", 1 + retries, last_err)
+        return -1
+
+    def close(self) -> None:
+        """Close the persistent connection."""
+        self._safe_close()
+
+    # -- internals --------------------------------------------------------
+
+    def _connect(self) -> None:
+        """Open (or reopen) the PostgreSQL connection with a timeout."""
+        self._safe_close()
+        s = self._settings.postgres
+        self._conn = self._psycopg2.connect(
+            host=s.host,
+            port=s.port,
+            user=s.user,
+            password=s.password,
+            dbname=s.database,
+            sslmode=s.sslmode,
+            connect_timeout=self.CONNECT_TIMEOUT,
         )
-        with conn.cursor() as cur:
-            cur.execute(f"SELECT COUNT(*) FROM {settings.postgres.schema_name}.events")
-            result = cur.fetchone()
-            count = result[0] if result else 0
-        conn.close()
-        return count
-    except Exception:
-        return 0
+        logger.debug("PgCounter connected to %s:%s/%s", s.host, s.port, s.database)
+
+    def _safe_close(self) -> None:
+        """Close connection without raising."""
+        if self._conn is not None:
+            try:
+                self._conn.close()  # type: ignore[union-attr]
+            except Exception:
+                pass
+            self._conn = None
 
 
 def _run_producer_blocking(limit: int, offset: int = 0) -> bool:
@@ -121,7 +201,11 @@ def _run_producer_blocking(limit: int, offset: int = 0) -> bool:
 
 
 def _wait_for_consumers_stable(
-    limit: int, group_id: str, quiet: bool = False, stall_timeout: int = 30
+    limit: int,
+    group_id: str,
+    pg: PgCounter,
+    quiet: bool = False,
+    stall_timeout: int = 30,
 ) -> tuple[int, float]:
     """
     Wait for consumers to finish processing by watching for process exit.
@@ -133,6 +217,7 @@ def _wait_for_consumers_stable(
     Args:
         limit: Target event count (for progress display)
         group_id: Kafka consumer group ID (unused, kept for API compatibility)
+        pg: Persistent PostgreSQL counter (avoids per-call connections)
         quiet: Suppress output
         stall_timeout: Seconds of no change before considering stalled (default: 30)
 
@@ -142,31 +227,51 @@ def _wait_for_consumers_stable(
     start_time = time.time()
     last_count = 0
     stall_seconds = 0
+    consecutive_errors = 0
 
     while True:
         # Check if consumers are still running
         running_pids = get_all_consumer_pids()
 
         # Get current count for progress display
-        count = _get_pg_event_count()
+        count = pg.count(retries=1)
+
+        # Track consecutive query failures (-1 means query failed)
+        if count == -1:
+            consecutive_errors += 1
+            # Use last known good count for display
+            display_count = last_count
+        else:
+            consecutive_errors = 0
+            display_count = count
 
         # Calculate progress bar (round to avoid 99% when at 99.9%)
-        percent = min(100, round(count / limit * 100)) if limit > 0 else 0
+        percent = min(100, round(display_count / limit * 100)) if limit > 0 else 0
         filled = int(percent / 5)  # 20 chars total, each = 5%
         bar = "█" * filled + "░" * (20 - filled)
 
         # Print progress (update in place)
         if not quiet:
+            error_indicator = f" {C.BRIGHT_RED}[DB error]{C.RESET}" if count == -1 else ""
             print(
-                f"\r  • Waiting for consumers... [{bar}] {percent:3d}% ({count:,} events)",
+                f"\r  • Waiting for consumers... [{bar}] {percent:3d}% ({display_count:,} events){error_indicator}   ",
                 end="",
                 flush=True,
             )
 
         # Primary exit: All consumers have exited (finished processing)
         if len(running_pids) == 0:
-            # Final count after all consumers have exited
-            final_count = _get_pg_event_count()
+            # Final count with retries — this is the value written to CSV
+            final_count = pg.count(retries=3)
+
+            if final_count == -1:
+                logger.error(
+                    "Failed to get final event count from PostgreSQL after consumers exited. "
+                    "Last known count: %d",
+                    last_count,
+                )
+                # Fall back to last known good count rather than reporting 0
+                final_count = last_count
 
             # Print final state with newline
             if not quiet:
@@ -180,19 +285,34 @@ def _wait_for_consumers_stable(
             duration = time.time() - start_time
             return final_count, duration
 
-        # Stall detection: if count doesn't change for stall_timeout seconds, exit with error
-        if count > 0 and count == last_count:
+        # Stall detection: count unchanged for stall_timeout seconds
+        # Works whether count is 0 (connection failures) or a positive value
+        effective_count = count if count != -1 else -1
+        if effective_count == last_count and last_count >= 0:
             stall_seconds += 1
             if stall_seconds >= stall_timeout:
                 if not quiet:
-                    print(
-                        f"\n  {C.BRIGHT_RED}{I.CROSS}{C.RESET} Processing stalled for {stall_timeout} seconds"
-                    )
-                raise SystemExit(1)
-        else:
+                    if last_count == 0:
+                        print(
+                            f"\n  {C.BRIGHT_RED}{I.CROSS}{C.RESET} No events received for {stall_timeout} seconds "
+                            f"(possible DB connection issue — check logs)"
+                        )
+                    else:
+                        print(
+                            f"\n  {C.BRIGHT_RED}{I.CROSS}{C.RESET} Processing stalled at {last_count:,} events for {stall_timeout} seconds"
+                        )
+                raise RuntimeError(
+                    f"Processing stalled at {last_count:,}/{limit:,} events "
+                    f"for {stall_timeout} seconds"
+                )
+        elif count != -1:
+            # Only reset stall counter on successful queries that show progress
             stall_seconds = 0
 
-        last_count = count
+        # Update last_count only on successful queries
+        if count != -1:
+            last_count = count
+
         time.sleep(1)
 
 
@@ -495,84 +615,90 @@ def benchmark_run(
             _print(f"  {C.BOLD}Running benchmark{C.RESET}")
 
         try:
-            # Network measurements (if requested) - re-measure each run
-            network_metrics = None
-            if network or network_latency:
-                from clickstream.utils.network import collect_network_metrics, measure_latencies
+            # Open a persistent PostgreSQL connection for this run
+            with PgCounter() as pg:
+                # Network measurements (if requested) - re-measure each run
+                network_metrics = None
+                if network or network_latency:
+                    from clickstream.utils.network import collect_network_metrics, measure_latencies
 
-                if network:
-                    network_metrics = collect_network_metrics(settings)
-                else:
-                    network_metrics = measure_latencies(settings)
+                    if network:
+                        network_metrics = collect_network_metrics(settings)
+                    else:
+                        network_metrics = measure_latencies(settings)
 
-            # Reset data
-            topic = settings.kafka.events_topic
-            purge_kafka_topic(topic)
-            reset_schema()
-            client = get_valkey_client()
-            client.flushall()
-            consumer_group = settings.postgresql_consumer.group_id
-            reset_consumer_group(consumer_group)
-            _print(f"  {C.BRIGHT_GREEN}{I.CHECK}{C.RESET} Resetting data")
+                # Reset data
+                topic = settings.kafka.events_topic
+                purge_kafka_topic(topic)
+                reset_schema()
+                client = get_valkey_client()
+                client.flushall()
+                consumer_group = settings.postgresql_consumer.group_id
+                reset_consumer_group(consumer_group)
+                _print(f"  {C.BRIGHT_GREEN}{I.CHECK}{C.RESET} Resetting data")
 
-            # Run producer first (so consumers have data to process)
-            producer_success = _run_producer_blocking(current_limit, offset)
-            if not producer_success:
-                _print(
-                    f"  {C.BRIGHT_RED}{I.CROSS}{C.RESET} Running producer ({current_limit:,} events)"
-                )
-                if not quiet:
-                    print(
-                        f"  {C.BRIGHT_YELLOW}{I.WARN} Run {run_num} failed, continuing...{C.RESET}"
+                # Reconnect after schema reset (the old connection's table was dropped)
+                pg.close()
+                pg._connect()
+
+                # Run producer first (so consumers have data to process)
+                producer_success = _run_producer_blocking(current_limit, offset)
+                if not producer_success:
+                    _print(
+                        f"  {C.BRIGHT_RED}{I.CROSS}{C.RESET} Running producer ({current_limit:,} events)"
                     )
-                continue
+                    if not quiet:
+                        print(
+                            f"  {C.BRIGHT_YELLOW}{I.WARN} Run {run_num} failed, continuing...{C.RESET}"
+                        )
+                    continue
 
-            _print(
-                f"  {C.BRIGHT_GREEN}{I.CHECK}{C.RESET} Running producer ({current_limit:,} events)"
-            )
-
-            # Start consumers (with benchmark mode for EOF exit)
-            project_root = get_project_root()
-            runner_script = project_root / "clickstream" / "consumer_runner.py"
-
-            for i in range(num_instances):
-                start_consumer_instance(
-                    runner_script, i, project_root, benchmark_mode=True, impl_override=impl
-                )
-                if i < num_instances - 1:
-                    time.sleep(1)
-
-            time.sleep(2)
-
-            running = get_all_consumer_pids()
-            if len(running) != num_instances:
                 _print(
-                    f"  {C.BRIGHT_RED}{I.CROSS}{C.RESET} Starting consumer ({consumer.parallelism_description})"
+                    f"  {C.BRIGHT_GREEN}{I.CHECK}{C.RESET} Running producer ({current_limit:,} events)"
                 )
+
+                # Start consumers (with benchmark mode for EOF exit)
+                project_root = get_project_root()
+                runner_script = project_root / "clickstream" / "consumer_runner.py"
+
+                for i in range(num_instances):
+                    start_consumer_instance(
+                        runner_script, i, project_root, benchmark_mode=True, impl_override=impl
+                    )
+                    if i < num_instances - 1:
+                        time.sleep(1)
+
+                time.sleep(2)
+
+                running = get_all_consumer_pids()
+                if len(running) != num_instances:
+                    _print(
+                        f"  {C.BRIGHT_RED}{I.CROSS}{C.RESET} Starting consumer ({consumer.parallelism_description})"
+                    )
+                    _print(
+                        f"    {C.BRIGHT_RED}Only {len(running)}/{num_instances} processes started{C.RESET}"
+                    )
+                    stop_all_consumers()
+                    if not quiet:
+                        print(
+                            f"  {C.BRIGHT_YELLOW}{I.WARN} Run {run_num} failed, continuing...{C.RESET}"
+                        )
+                    continue
+
                 _print(
-                    f"    {C.BRIGHT_RED}Only {len(running)}/{num_instances} processes started{C.RESET}"
+                    f"  {C.BRIGHT_GREEN}{I.CHECK}{C.RESET} Starting consumer ({consumer.parallelism_description})"
                 )
+
+                # Wait for consumers (they will exit when EOF is reached)
+                consumer_group = settings.postgresql_consumer.group_id
+                events_consumed, duration = _wait_for_consumers_stable(
+                    current_limit, consumer_group, pg=pg, quiet=quiet
+                )
+
+                # Consumers have exited on their own (benchmark mode)
+                # Clean up any remaining PID files
                 stop_all_consumers()
-                if not quiet:
-                    print(
-                        f"  {C.BRIGHT_YELLOW}{I.WARN} Run {run_num} failed, continuing...{C.RESET}"
-                    )
-                continue
-
-            _print(
-                f"  {C.BRIGHT_GREEN}{I.CHECK}{C.RESET} Starting consumer ({consumer.parallelism_description})"
-            )
-
-            # Wait for consumers (they will exit when EOF is reached)
-            consumer_group = settings.postgresql_consumer.group_id
-            events_consumed, duration = _wait_for_consumers_stable(
-                current_limit, consumer_group, quiet=quiet
-            )
-
-            # Consumers have exited on their own (benchmark mode)
-            # Clean up any remaining PID files
-            stop_all_consumers()
-            _print(f"  {C.BRIGHT_GREEN}{I.CHECK}{C.RESET} Consumers finished")
+                _print(f"  {C.BRIGHT_GREEN}{I.CHECK}{C.RESET} Consumers finished")
 
             # Calculate throughput
             throughput = round(events_consumed / duration) if duration > 0 else 0
@@ -619,6 +745,11 @@ def benchmark_run(
                     f.write(csv_header)
                 f.write(csv_row)
 
+        except KeyboardInterrupt:
+            stop_all_consumers()
+            if not quiet:
+                print(f"\n  {C.BRIGHT_RED}{I.CROSS} Run {run_num} interrupted{C.RESET}")
+            break
         except Exception as e:
             stop_all_consumers()
             if not quiet:

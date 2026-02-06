@@ -18,7 +18,9 @@ their own implementation.
 import json
 import logging
 import signal
+import time
 
+from clickstream.consumers.batch_processor import BatchMetrics
 from clickstream.infrastructure.kafka import build_kafka_config
 from clickstream.infrastructure.repositories.postgresql import (
     PostgreSQLEventRepository,
@@ -137,6 +139,38 @@ def run() -> None:
         ttl_hours=settings.valkey.session_ttl_hours,
     )
 
+    # Consumer lag logging callback for periodic summaries
+    def _log_consumer_lag():
+        """Log consumer lag for all assigned partitions."""
+        assigned = consumer.assignment()
+        if not assigned:
+            return
+        end_offsets = consumer.end_offsets(assigned)
+        parts = []
+        total_lag = 0
+        for tp in sorted(assigned, key=lambda tp: tp.partition):
+            try:
+                pos = consumer.position(tp)
+                high = end_offsets.get(tp, 0)
+                lag = max(0, high - pos)
+            except Exception:
+                lag = -1
+            if lag >= 0:
+                parts.append(f"p{tp.partition}={lag:,}")
+                total_lag += lag
+            else:
+                parts.append(f"p{tp.partition}=?")
+        logger.info("Consumer lag: %s | total=%s", " ".join(parts), f"{total_lag:,}")
+
+    # Initialize batch metrics with lag callback
+    batch_metrics = BatchMetrics(
+        event_repo,
+        session_state,
+        session_repo,
+        on_summary=_log_consumer_lag,
+        log=logger,
+    )
+
     # Track consecutive empty polls for benchmark mode EOF detection
     empty_poll_count = 0
     max_empty_polls = 3  # Exit after 3 consecutive empty polls when at EOF
@@ -152,10 +186,12 @@ def run() -> None:
     try:
         while not _shutdown_requested:
             # Poll batch of messages
+            t_poll_start = time.monotonic()
             raw_messages = consumer.poll(
                 timeout_ms=consumer_settings.poll_timeout_ms,
                 max_records=consumer_settings.batch_size,
             )
+            poll_ms = (time.monotonic() - t_poll_start) * 1000
 
             if not raw_messages:
                 # In benchmark mode, check if we've consumed everything
@@ -182,24 +218,18 @@ def run() -> None:
                 continue
 
             try:
-                # 1. Save events to PostgreSQL
-                event_repo.save(events)
+                # Log poll timing when batch is non-empty
+                msg_count = sum(len(msgs) for msgs in raw_messages.values())
+                logger.info("Poll: %.0fms (%s messages)", poll_ms, f"{msg_count:,}")
 
-                # 2. Update sessions in Valkey (batch operation - 2 round-trips)
-                updated_sessions = session_state.batch_update_sessions(events)
+                # Process batch with instrumented 3-step pipeline
+                batch_metrics.process_batch(events)
 
-                # 3. Convert and save sessions to PostgreSQL
-                session_records = [session_state.to_db_record(s) for s in updated_sessions]
-                session_repo.save(session_records)
-
-                # 4. Commit offsets
+                # Commit offsets (timed)
+                t_commit = time.monotonic()
                 consumer.commit()
-
-                logger.debug(
-                    "Processed batch: %d events, %d sessions",
-                    len(events),
-                    len(session_records),
-                )
+                commit_ms = (time.monotonic() - t_commit) * 1000
+                logger.info("Commit: %.0fms", commit_ms)
 
             except Exception as e:
                 logger.error("Error processing batch: %s", e)
@@ -221,6 +251,7 @@ def run() -> None:
         raise
 
     finally:
+        batch_metrics.log_final_summary()
         consumer.close()
         event_repo.close()
         session_repo.close()

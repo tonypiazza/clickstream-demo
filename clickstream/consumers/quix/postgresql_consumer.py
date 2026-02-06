@@ -76,9 +76,11 @@ def run():
     )
 
     # Initialize unified sink for events and sessions
+    # Inject app's internal consumer for lag monitoring (private but stable attr)
     sink = PostgreSQLSink(
         settings=settings,
         session_state=session_state,
+        consumer=getattr(app, "_consumer", None),
     )
 
     # Build streaming dataframe
