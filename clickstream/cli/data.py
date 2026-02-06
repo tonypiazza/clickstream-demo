@@ -9,7 +9,6 @@ Commands for resetting data stores (Kafka, PostgreSQL, Valkey, OpenSearch).
 
 import os
 import warnings
-from pathlib import Path
 from typing import Annotated
 
 import typer

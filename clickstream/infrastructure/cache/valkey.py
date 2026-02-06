@@ -15,7 +15,6 @@ Uses JSON serialization for storing dict values.
 
 import json
 import logging
-from typing import Any
 
 import redis
 from redis.backoff import ExponentialBackoff

@@ -8,7 +8,7 @@ Uses kafka-python for consuming with manual offset commits.
 Leverages shared infrastructure repositories for persistence.
 """
 
-from clickstream.consumers.base import ConsumerType, StreamingConsumer
+from clickstream.consumers.base import StreamingConsumer
 from clickstream.utils.versions import get_package_version
 
 

@@ -8,7 +8,7 @@ This is the highest-performance consumer option, using the native C library
 for Kafka protocol handling. Significantly faster than pure-Python kafka-python.
 """
 
-from clickstream.consumers.base import ConsumerType, StreamingConsumer
+from clickstream.consumers.base import StreamingConsumer
 from clickstream.utils.versions import get_package_version
 
 

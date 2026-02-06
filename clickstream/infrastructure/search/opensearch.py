@@ -13,8 +13,6 @@ from datetime import datetime, timezone
 from typing import Optional, Tuple
 
 from opensearchpy import OpenSearch
-from opensearchpy.exceptions import ConnectionError as OSConnectionError
-from opensearchpy.exceptions import ConnectionTimeout
 from opensearchpy.helpers import bulk
 
 from clickstream.base.repositories import SearchRepository

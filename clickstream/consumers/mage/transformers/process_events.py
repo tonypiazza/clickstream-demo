@@ -6,7 +6,7 @@ This transformer:
 2. Returns events and sessions for downstream export to PostgreSQL
 """
 
-from typing import Dict, List
+from typing import Dict
 import logging
 
 if "transformer" not in globals():

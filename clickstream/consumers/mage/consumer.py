@@ -11,7 +11,7 @@ data_loaders/, transformers/, data_exporters/). The Mage project files
 are located at clickstream/consumers/mage/ and must maintain this structure.
 """
 
-from clickstream.consumers.base import ConsumerType, StreamingConsumer
+from clickstream.consumers.base import StreamingConsumer
 from clickstream.utils.versions import get_package_version
 
 

@@ -7,7 +7,7 @@ Quix Streams consumer implementation.
 Uses Quix Streams' BatchingSink API for efficient batch processing.
 """
 
-from clickstream.consumers.base import ConsumerType, StreamingConsumer
+from clickstream.consumers.base import StreamingConsumer
 from clickstream.utils.versions import get_package_version
 
 

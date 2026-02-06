@@ -17,10 +17,9 @@ Key differences from Bytewax's built-in KafkaSource:
 3. Commit failures raise exceptions immediately
 """
 
-import json
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional, Tuple, Union
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from bytewax.inputs import FixedPartitionedSource, StatefulSourcePartition
 from confluent_kafka import Consumer, TopicPartition, OFFSET_BEGINNING
