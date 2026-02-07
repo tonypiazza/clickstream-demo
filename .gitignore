@@ -28,7 +28,8 @@ Thumbs.db
 .ruff_cache/
 
 # Benchmark
-benchmark_results.csv
+benchmark_run_results.csv
+benchmark_ramp_results.csv
 
 # Terraform
 terraform/terraform.tfvars

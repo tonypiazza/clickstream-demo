@@ -291,6 +291,84 @@ def reset_consumer_group(group_id: str) -> tuple[bool, str]:
         return False, str(e)
 
 
+def get_consumer_lag(
+    group_id: str,
+    topic: str,
+    admin_client=None,
+    consumer=None,
+) -> dict[int, int]:
+    """
+    Query Kafka directly for consumer group lag per partition.
+
+    Uses KafkaAdminClient.list_consumer_group_offsets() for committed offsets
+    and KafkaConsumer.end_offsets() for the high watermark.
+
+    Pre-created client instances can be passed for reuse across repeated calls.
+    If not provided, ephemeral clients are created and closed after use.
+
+    Args:
+        group_id: Kafka consumer group ID (e.g., "clickstream-postgresql")
+        topic: Topic name to query lag for
+        admin_client: Optional pre-created KafkaAdminClient instance
+        consumer: Optional pre-created KafkaConsumer instance
+
+    Returns:
+        Dict mapping partition index to lag (messages behind).
+        Returns empty dict on failure.
+    """
+    from kafka import KafkaAdminClient, KafkaConsumer, TopicPartition
+
+    own_admin = admin_client is None
+    own_consumer = consumer is None
+
+    try:
+        if own_admin:
+            admin_client = KafkaAdminClient(**build_kafka_config(request_timeout_ms=10000))
+        if own_consumer:
+            consumer = KafkaConsumer(**build_kafka_config(request_timeout_ms=10000))
+
+        # Get committed offsets for the consumer group
+        committed = admin_client.list_consumer_group_offsets(group_id)
+
+        # Filter to the target topic and build partition list
+        topic_committed: dict[int, int] = {}
+        topic_partitions: list = []
+        for tp, offset_meta in committed.items():
+            if tp.topic == topic and offset_meta.offset >= 0:
+                topic_committed[tp.partition] = offset_meta.offset
+                topic_partitions.append(TopicPartition(topic, tp.partition))
+
+        if not topic_partitions:
+            return {}
+
+        # Get end offsets (high watermark) for each partition
+        end_offsets = consumer.end_offsets(topic_partitions)
+
+        # Compute lag per partition
+        result: dict[int, int] = {}
+        for tp, end_offset in end_offsets.items():
+            committed_offset = topic_committed.get(tp.partition, 0)
+            result[tp.partition] = max(0, end_offset - committed_offset)
+
+        return dict(sorted(result.items()))
+
+    except Exception as e:
+        logger.debug("Failed to query consumer lag: %s", e)
+        return {}
+
+    finally:
+        if own_admin and admin_client is not None:
+            try:
+                admin_client.close()
+            except Exception:
+                pass
+        if own_consumer and consumer is not None:
+            try:
+                consumer.close()
+            except Exception:
+                pass
+
+
 # ==============================================================================
 # Message Processing
 # ==============================================================================

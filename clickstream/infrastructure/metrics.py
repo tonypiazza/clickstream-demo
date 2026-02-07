@@ -7,6 +7,7 @@ Pipeline metrics tracking and monitoring.
 This module provides:
 - Producer message counters
 - Throughput stats tracking (events/sec)
+- Consumer lag time-series tracking
 
 All metrics are stored in Valkey/Redis with appropriate TTLs.
 """
@@ -27,7 +28,9 @@ logger = logging.getLogger(__name__)
 
 PRODUCER_MESSAGES_KEY = "producer:messages_produced"
 STATS_SAMPLES_KEY_PREFIX = "clickstream:stats:samples:"
+LAG_SAMPLES_KEY_PREFIX = "clickstream:lag:samples:"
 STATS_TTL_SECONDS = 3600  # 1 hour
+LAG_TTL_SECONDS = 3600  # 1 hour
 
 
 class PipelineMetrics:
@@ -37,6 +40,7 @@ class PipelineMetrics:
     Tracks:
     - Producer message counts
     - Consumer throughput (events/sec)
+    - Consumer lag time-series (per-partition offsets)
     """
 
     def __init__(self, cache: ValkeyCache | None = None):
@@ -180,6 +184,171 @@ class PipelineMetrics:
             "samples_count": len(samples),
         }
 
+    # ==========================================================================
+    # Consumer Lag Tracking
+    # ==========================================================================
+
+    def record_lag_sample(
+        self,
+        consumer_group: str,
+        instance: int,
+        partition_lags: dict[int, int],
+    ) -> None:
+        """
+        Record a consumer lag sample in Valkey.
+
+        Stores per-partition lag as a sorted-set entry keyed by timestamp.
+        Each consumer instance records its own lag independently.
+
+        Args:
+            consumer_group: Kafka consumer group ID (e.g., "clickstream-postgresql")
+            instance: Consumer instance number (0-indexed)
+            partition_lags: Mapping of partition index to lag (messages behind)
+        """
+        timestamp = int(time.time())
+        key = f"{LAG_SAMPLES_KEY_PREFIX}{consumer_group}:{instance}"
+
+        sample_data = {
+            "ts": timestamp,
+            "instance": instance,
+            "partitions": partition_lags,
+            "total": sum(partition_lags.values()),
+        }
+        sample = json.dumps(sample_data)
+
+        self.client.zadd(key, {sample: timestamp})
+        self.client.expire(key, LAG_TTL_SECONDS)
+
+        # Clean up old samples
+        cutoff = timestamp - LAG_TTL_SECONDS
+        self.client.zremrangebyscore(key, "-inf", cutoff)
+
+    def get_lag_history(
+        self,
+        consumer_group: str,
+        window_seconds: int = 300,
+    ) -> list[dict]:
+        """
+        Get lag history across all consumer instances.
+
+        Retrieves lag samples from all instances within the time window,
+        merges them by timestamp, and returns a unified per-partition view.
+
+        Args:
+            consumer_group: Kafka consumer group ID
+            window_seconds: How far back to look (default: 5 minutes)
+
+        Returns:
+            List of dicts sorted by timestamp, each containing:
+            - ts: Unix timestamp
+            - partitions: {partition_index: lag}
+            - total: Total lag across all partitions
+        """
+        # Discover all instance keys for this consumer group
+        pattern = f"{LAG_SAMPLES_KEY_PREFIX}{consumer_group}:*"
+        keys = []
+        cursor = 0
+        while True:
+            cursor, batch = self.client.scan(cursor, match=pattern, count=100)
+            keys.extend(batch)
+            if cursor == 0:
+                break
+
+        if not keys:
+            return []
+
+        cutoff = int(time.time()) - window_seconds
+
+        # Collect samples from all instances
+        # Group by timestamp so we merge partitions from different instances
+        samples_by_ts: dict[int, dict[int, int]] = {}
+
+        for key in keys:
+            raw = self.client.zrangebyscore(key, cutoff, "+inf", withscores=True)
+            if not raw:
+                continue
+            for sample_json, _score in raw:
+                try:
+                    sample = json.loads(sample_json)
+                except json.JSONDecodeError:
+                    continue
+                ts = sample["ts"]
+                partitions = sample.get("partitions", {})
+                if ts not in samples_by_ts:
+                    samples_by_ts[ts] = {}
+                # Merge partitions (each instance reports different partitions)
+                for part_str, lag in partitions.items():
+                    samples_by_ts[ts][int(part_str)] = lag
+
+        # Build sorted result
+        result = []
+        for ts in sorted(samples_by_ts):
+            partitions = samples_by_ts[ts]
+            result.append(
+                {
+                    "ts": ts,
+                    "partitions": dict(sorted(partitions.items())),
+                    "total": sum(partitions.values()),
+                }
+            )
+
+        return result
+
+    def get_lag_trend(
+        self,
+        consumer_group: str,
+        window_seconds: int = 120,
+    ) -> str:
+        """
+        Determine whether consumer lag is growing, stable, or shrinking.
+
+        Uses linear regression over recent lag samples to compute a trend.
+        The slope is compared against the mean lag to determine significance.
+
+        Args:
+            consumer_group: Kafka consumer group ID
+            window_seconds: Time window for trend analysis (default: 2 minutes)
+
+        Returns:
+            One of: "growing", "stable", "shrinking", or "unknown"
+        """
+        history = self.get_lag_history(consumer_group, window_seconds)
+
+        if len(history) < 2:
+            return "unknown"
+
+        # Extract (timestamp, total_lag) pairs
+        points = [(s["ts"], s["total"]) for s in history]
+
+        # Simple linear regression: slope = correlation * (std_y / std_x)
+        n = len(points)
+        sum_x = sum(t for t, _ in points)
+        sum_y = sum(lag for _, lag in points)
+        sum_xy = sum(t * lag for t, lag in points)
+        sum_x2 = sum(t * t for t, _ in points)
+
+        denominator = n * sum_x2 - sum_x * sum_x
+        if denominator == 0:
+            return "unknown"
+
+        slope = (n * sum_xy - sum_x * sum_y) / denominator
+
+        # Determine significance relative to mean lag
+        mean_lag = sum_y / n
+        if mean_lag == 0:
+            # No lag at all
+            return "stable" if abs(slope) < 1 else ("growing" if slope > 0 else "shrinking")
+
+        # Slope as a fraction of mean lag per second
+        # > 1% of mean lag per second = significant trend
+        relative_slope = abs(slope) / mean_lag
+        if relative_slope < 0.01:
+            return "stable"
+        elif slope > 0:
+            return "growing"
+        else:
+            return "shrinking"
+
 
 # ==============================================================================
 # Module-level convenience functions (for backward compatibility)
@@ -219,3 +388,18 @@ def record_stats_sample(source: str, count: int, count2: Optional[int] = None) -
 def get_throughput_stats(source: str) -> dict:
     """Calculate throughput stats."""
     return _get_metrics().get_throughput_stats(source)
+
+
+def record_lag_sample(consumer_group: str, instance: int, partition_lags: dict[int, int]) -> None:
+    """Record a consumer lag sample."""
+    _get_metrics().record_lag_sample(consumer_group, instance, partition_lags)
+
+
+def get_lag_history(consumer_group: str, window_seconds: int = 300) -> list[dict]:
+    """Get lag history across all consumer instances."""
+    return _get_metrics().get_lag_history(consumer_group, window_seconds)
+
+
+def get_lag_trend(consumer_group: str, window_seconds: int = 120) -> str:
+    """Determine whether consumer lag is growing, stable, or shrinking."""
+    return _get_metrics().get_lag_trend(consumer_group, window_seconds)

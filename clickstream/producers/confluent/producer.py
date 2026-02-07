@@ -160,6 +160,7 @@ def run_producer(
     limit: Optional[int] = None,
     realtime: bool = False,
     speed: float = 1.0,
+    rate: Optional[float] = None,
 ) -> None:
     """
     Run the confluent-kafka producer.
@@ -168,6 +169,7 @@ def run_producer(
         limit: Maximum number of events to produce (None for all)
         realtime: Whether to replay events in real-time
         speed: Speed multiplier for real-time replay
+        rate: Target events per second via token bucket rate limiter
     """
     global _shutdown_requested
     _shutdown_requested = False
@@ -194,7 +196,9 @@ def run_producer(
         sys.exit(1)
 
     logger.info("Events file: %s", events_file)
-    if realtime:
+    if rate:
+        logger.info("Mode: Rate-limited (%s events/sec)", f"{rate:,.0f}")
+    elif realtime:
         logger.info("Mode: Real-time (%dx speed)", int(speed))
     else:
         logger.info("Mode: Batch (no delays)")
@@ -214,6 +218,16 @@ def run_producer(
     # Reset counter at start of new producer run
     set_producer_messages(0)
 
+    # Create rate limiter if rate-limited mode is requested
+    limiter = None
+    if rate:
+        from clickstream.utils.rate_limiter import TokenBucketRateLimiter
+
+        limiter = TokenBucketRateLimiter(
+            rate=rate,
+            shutdown_check=lambda: _shutdown_requested,
+        )
+
     # Track delivery errors
     delivery_errors = 0
 
@@ -230,6 +244,7 @@ def run_producer(
         last_increment = 0  # Track last increment point for Valkey updates
         last_timestamp = None
         last_log_time = time.time()
+        last_log_events = 0
         log_interval = 10  # Log progress every 10 seconds
         increment_interval = 10000  # Update Valkey counter every 10,000 events
         poll_interval = 1000  # Poll for callbacks every 1000 messages
@@ -259,6 +274,11 @@ def run_producer(
 
             # Produce message with retry on queue full
             # Use visitor_id as key for partition affinity (same visitor -> same partition)
+            if limiter:
+                limiter.acquire()
+                if _shutdown_requested:
+                    break
+
             max_retries = 5
             for retry in range(max_retries):
                 try:
@@ -293,8 +313,21 @@ def run_producer(
             # Log progress periodically
             current_time = time.time()
             if current_time - last_log_time >= log_interval:
-                logger.info("Progress: %d events sent", events_sent)
+                elapsed = current_time - last_log_time
+                actual_rate = int((events_sent - last_log_events) / elapsed) if elapsed > 0 else 0
+                if rate:
+                    logger.info(
+                        "Progress: %d events sent | %s events/sec (target: %s)",
+                        events_sent,
+                        f"{actual_rate:,}",
+                        f"{rate:,.0f}",
+                    )
+                else:
+                    logger.info(
+                        "Progress: %d events sent | %s events/sec", events_sent, f"{actual_rate:,}"
+                    )
                 last_log_time = current_time
+                last_log_events = events_sent
 
         # Flush remaining messages (wait for all deliveries)
         logger.info("Flushing remaining messages...")
@@ -344,6 +377,7 @@ class ConfluentProducer(StreamingProducer):
         limit: Optional[int] = None,
         realtime: bool = False,
         speed: float = 1.0,
+        rate: Optional[float] = None,
     ) -> None:
         """Run the confluent-kafka producer."""
-        run_producer(limit=limit, realtime=realtime, speed=speed)
+        run_producer(limit=limit, realtime=realtime, speed=speed, rate=rate)

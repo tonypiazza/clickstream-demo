@@ -70,6 +70,8 @@ def main():
     speed = float(speed_env) if speed_env else 1.0
     limit_env = os.environ.get("PRODUCER_LIMIT")
     limit = int(limit_env) if limit_env else None
+    rate_env = os.environ.get("PRODUCER_RATE")
+    rate = float(rate_env) if rate_env else None
 
     # Get producer
     from clickstream.producers import get_producer
@@ -86,7 +88,7 @@ def main():
 
     start_time = time.time()
     try:
-        producer.run(limit=limit, realtime=realtime_mode, speed=speed)
+        producer.run(limit=limit, realtime=realtime_mode, speed=speed, rate=rate)
 
     except GracefulShutdown:
         logger.info("Producer interrupted by shutdown signal.")

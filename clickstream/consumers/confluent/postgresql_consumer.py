@@ -21,6 +21,7 @@ Uses:
 
 import json
 import logging
+import os
 import signal
 import time
 
@@ -177,14 +178,17 @@ def run() -> None:
     )
 
     # Consumer lag logging callback for periodic summaries
+    instance = int(os.environ.get("CONSUMER_INSTANCE", "0"))
+
     def _log_consumer_lag():
-        """Log consumer lag for all assigned partitions."""
+        """Log consumer lag for all assigned partitions and persist to Valkey."""
         if not assigned_partitions:
             return
         from confluent_kafka import TopicPartition as _TP
 
         parts = []
         total_lag = 0
+        partition_lags: dict[int, int] = {}
         for topic_name, part_idx in sorted(assigned_partitions):
             try:
                 tp = _TP(topic_name, part_idx)
@@ -199,9 +203,19 @@ def run() -> None:
             if lag >= 0:
                 parts.append(f"p{part_idx}={lag:,}")
                 total_lag += lag
+                partition_lags[part_idx] = lag
             else:
                 parts.append(f"p{part_idx}=?")
         logger.info("Consumer lag: %s | total=%s", " ".join(parts), f"{total_lag:,}")
+
+        # Persist lag sample to Valkey for time-series tracking
+        if partition_lags:
+            try:
+                from clickstream.infrastructure.metrics import record_lag_sample
+
+                record_lag_sample(group_id, instance, partition_lags)
+            except Exception as e:
+                logger.debug("Failed to record lag sample: %s", e)
 
     # Initialize batch metrics with lag callback
     batch_metrics = BatchMetrics(

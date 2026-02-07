@@ -51,6 +51,7 @@ class StreamingProducer(ABC):
         limit: Optional[int] = None,
         realtime: bool = False,
         speed: float = 1.0,
+        rate: Optional[float] = None,
     ) -> None:
         """
         Run the producer.
@@ -59,5 +60,7 @@ class StreamingProducer(ABC):
             limit: Maximum number of events to produce (None for all)
             realtime: Whether to replay events in real-time
             speed: Speed multiplier for real-time replay (e.g., 2.0 for 2x speed)
+            rate: Target events per second via token bucket rate limiter.
+                Mutually exclusive with *realtime*.
         """
         pass

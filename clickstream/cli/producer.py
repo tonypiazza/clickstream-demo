@@ -132,6 +132,10 @@ def producer_start(
     limit: Annotated[
         Optional[int], typer.Option("--limit", "-l", help="Limit number of events (default: all)")
     ] = None,
+    rate: Annotated[
+        Optional[float],
+        typer.Option("--rate", help="Target events per second (sustained rate via token bucket)"),
+    ] = None,
     truncate_log: Annotated[
         bool, typer.Option("--truncate-log", "-t", help="Truncate log file before starting")
     ] = False,
@@ -143,12 +147,14 @@ def producer_start(
 
     By default, runs in batch mode (no delays) for fastest processing.
     Use --realtime to replay events with original timing.
+    Use --rate to produce at a sustained events/sec rate.
 
     Examples:
         clickstream producer start                    # Batch mode (fastest)
         clickstream producer start --limit 1000       # Batch mode, first 1000 events
         clickstream producer start --realtime         # Real-time replay (1x speed)
         clickstream producer start --realtime 10x     # 10x faster than real-time
+        clickstream producer start --rate 5000        # 5,000 events/sec sustained
         clickstream producer start --truncate-log     # Clear log before starting
     """
     # Check if already running
@@ -158,6 +164,15 @@ def producer_start(
         print(f"  Use '{C.DIM}clickstream producer stop{C.RESET}' to stop it")
         raise typer.Exit(1)
 
+    # Validate mutual exclusivity: --rate and --realtime cannot be combined
+    realtime_mode = realtime is not None
+    if rate is not None and realtime_mode:
+        print(f"{C.BRIGHT_RED}{I.STOP} --rate and --realtime are mutually exclusive{C.RESET}")
+        print(
+            f"  {C.DIM}Use --rate for sustained throughput or --realtime for replay timing{C.RESET}"
+        )
+        raise typer.Exit(1)
+
     # Truncate log file if requested
     if truncate_log and PRODUCER_LOG_FILE.exists():
         PRODUCER_LOG_FILE.unlink()
@@ -165,13 +180,14 @@ def producer_start(
 
     # Parse realtime mode
     # realtime=None means batch mode, realtime="" (flag with no value) means 1x speed
-    realtime_mode = realtime is not None
     speed = 1
     if realtime_mode and realtime:
         speed = _parse_realtime_speed(realtime)
 
     print("  Starting producer pipeline...")
-    if realtime_mode:
+    if rate is not None:
+        print(f"  Mode:  {C.WHITE}Rate-limited ({rate:,.0f} events/sec){C.RESET}")
+    elif realtime_mode:
         print(f"  Mode:  {C.WHITE}Real-time ({speed}x){C.RESET}")
     else:
         print(f"  Mode:  {C.WHITE}Batch (no delays){C.RESET}")
@@ -191,6 +207,8 @@ def producer_start(
         extra_env["PRODUCER_SPEED"] = str(speed)
     if limit:
         extra_env["PRODUCER_LIMIT"] = str(limit)
+    if rate is not None:
+        extra_env["PRODUCER_RATE"] = str(rate)
 
     if start_background_process(
         runner_script, PRODUCER_PID_FILE, PRODUCER_LOG_FILE, "Producer", extra_env

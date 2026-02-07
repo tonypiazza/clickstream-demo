@@ -94,6 +94,9 @@ def main():
 
     settings = get_settings()
 
+    # Make instance number available to consumer implementations (for lag tracking)
+    os.environ["CONSUMER_INSTANCE"] = str(args.instance)
+
     if args.type == "postgresql":
         os.environ["CLICKSTREAM_CONSUMER_GROUP"] = settings.postgresql_consumer.group_id
     else:

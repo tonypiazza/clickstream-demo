@@ -130,10 +130,22 @@ benchmark_app = typer.Typer(
 )
 app.add_typer(benchmark_app, name="benchmark")
 
-from clickstream.cli.benchmark import benchmark_run, benchmark_show
+from clickstream.cli.benchmark import benchmark_ramp, benchmark_run, benchmark_show
 
 benchmark_app.command("run")(benchmark_run)
 benchmark_app.command("show")(benchmark_show)
+benchmark_app.command("ramp")(benchmark_ramp)
+
+lag_app = typer.Typer(
+    help="Consumer lag monitoring",
+    no_args_is_help=True,
+)
+app.add_typer(lag_app, name="lag")
+
+from clickstream.cli.lag import lag_history, lag_show
+
+lag_app.command("show")(lag_show)
+lag_app.command("history")(lag_history)
 
 
 # ==============================================================================

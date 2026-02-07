@@ -42,6 +42,7 @@ clickstream = "clickstream.app:main"
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
+    "fakeredis>=2.20",
     "ruff>=0.1",
     "mypy>=1.0",
 ]
@@ -59,6 +60,10 @@ bytewax = [
 [tool.ruff]
 target-version = "py312"
 line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]

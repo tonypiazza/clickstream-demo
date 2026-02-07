@@ -191,6 +191,10 @@ class ProducerSettings(BaseSettings):
         description="Producer implementation (confluent, kafka_python, quix)",
     )
     data_file: Path = Field(default=Path("data/events.csv"), description="Path to events CSV file")
+    rate: Optional[float] = Field(
+        default=None,
+        description="Target events per second (token bucket rate limiter)",
+    )
 
     @property
     def data_file_path(self) -> Path:
