@@ -109,10 +109,12 @@ resource "aiven_valkey" "this" {
 
   project_vpc_id = var.privatelink_enabled ? aiven_project_vpc.this[0].id : null
 
-  dynamic "valkey_user_config" {
-    for_each = var.privatelink_enabled ? [1] : []
-    content {
-      privatelink_access {
+  valkey_user_config {
+    valkey_maxmemory_policy = "allkeys-lru"
+
+    dynamic "privatelink_access" {
+      for_each = var.privatelink_enabled ? [1] : []
+      content {
         valkey = true
       }
     }

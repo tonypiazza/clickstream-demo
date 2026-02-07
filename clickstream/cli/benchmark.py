@@ -529,7 +529,7 @@ def benchmark_run(
     # Configuration display
     _print()
     _print(f"  {C.BOLD}Benchmark Configuration{C.RESET}")
-    if impl is not None:
+    if impl is not None and impl != settings.consumer.impl:
         _print(
             f"  • Consumer Impl:        {C.WHITE}{effective_impl}{C.RESET} {C.BRIGHT_YELLOW}(override){C.RESET}"
         )
