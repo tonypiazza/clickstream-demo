@@ -61,6 +61,8 @@ def _write_ramp_csv(tmp_path: Path, rows: list[dict], filename: str = "ramp.csv"
     # Collect all keys in order: base columns first, then partition columns
     base_cols = [
         "timestamp",
+        "run_id",
+        "consumer_impl",
         "step",
         "rate_target",
         "consumer_throughput",
@@ -116,7 +118,10 @@ class TestShowRampResults:
     def test_empty_csv(self, tmp_path):
         """Exits with error when CSV has only headers."""
         filepath = tmp_path / "empty.csv"
-        filepath.write_text("timestamp,step,rate_target,consumer_throughput,total_lag,lag_trend\n")
+        filepath.write_text(
+            "timestamp,run_id,consumer_impl,step,rate_target,"
+            "consumer_throughput,total_lag,lag_trend\n"
+        )
         app = _make_show_app()
         result = runner.invoke(app, ["--ramp", "--file", str(filepath)])
         assert result.exit_code == 1
@@ -127,6 +132,8 @@ class TestShowRampResults:
         rows = [
             {
                 "timestamp": "2026-02-01T14:30:05",
+                "run_id": "aaa111bbb222",
+                "consumer_impl": "confluent",
                 "step": "1",
                 "rate_target": "1000",
                 "consumer_throughput": "980",
@@ -138,6 +145,8 @@ class TestShowRampResults:
             },
             {
                 "timestamp": "2026-02-01T14:30:10",
+                "run_id": "aaa111bbb222",
+                "consumer_impl": "confluent",
                 "step": "1",
                 "rate_target": "1000",
                 "consumer_throughput": "995",
@@ -160,6 +169,8 @@ class TestShowRampResults:
             # Step 1: stable
             {
                 "timestamp": "2026-02-01T14:30:05",
+                "run_id": "aaa111bbb222",
+                "consumer_impl": "confluent",
                 "step": "1",
                 "rate_target": "1000",
                 "consumer_throughput": "980",
@@ -168,6 +179,8 @@ class TestShowRampResults:
             },
             {
                 "timestamp": "2026-02-01T14:30:10",
+                "run_id": "aaa111bbb222",
+                "consumer_impl": "confluent",
                 "step": "1",
                 "rate_target": "1000",
                 "consumer_throughput": "990",
@@ -177,6 +190,8 @@ class TestShowRampResults:
             # Step 2: stable
             {
                 "timestamp": "2026-02-01T14:31:05",
+                "run_id": "aaa111bbb222",
+                "consumer_impl": "confluent",
                 "step": "2",
                 "rate_target": "3000",
                 "consumer_throughput": "2900",
@@ -185,6 +200,8 @@ class TestShowRampResults:
             },
             {
                 "timestamp": "2026-02-01T14:31:10",
+                "run_id": "aaa111bbb222",
+                "consumer_impl": "confluent",
                 "step": "2",
                 "rate_target": "3000",
                 "consumer_throughput": "2950",
@@ -194,6 +211,8 @@ class TestShowRampResults:
             # Step 3: growing (saturation)
             {
                 "timestamp": "2026-02-01T14:32:05",
+                "run_id": "aaa111bbb222",
+                "consumer_impl": "confluent",
                 "step": "3",
                 "rate_target": "5000",
                 "consumer_throughput": "3500",
@@ -202,6 +221,8 @@ class TestShowRampResults:
             },
             {
                 "timestamp": "2026-02-01T14:32:10",
+                "run_id": "aaa111bbb222",
+                "consumer_impl": "confluent",
                 "step": "3",
                 "rate_target": "5000",
                 "consumer_throughput": "3400",
@@ -222,6 +243,8 @@ class TestShowRampResults:
         rows = [
             {
                 "timestamp": "2026-02-01T14:30:05",
+                "run_id": "aaa111bbb222",
+                "consumer_impl": "confluent",
                 "step": "1",
                 "rate_target": "1000",
                 "consumer_throughput": "980",
@@ -230,6 +253,8 @@ class TestShowRampResults:
             },
             {
                 "timestamp": "2026-02-01T14:31:05",
+                "run_id": "aaa111bbb222",
+                "consumer_impl": "confluent",
                 "step": "2",
                 "rate_target": "3000",
                 "consumer_throughput": "2900",
@@ -247,6 +272,8 @@ class TestShowRampResults:
         rows = [
             {
                 "timestamp": "2026-01-01T12:00:00",
+                "run_id": "aaa111bbb222",
+                "consumer_impl": "confluent",
                 "step": "1",
                 "rate_target": "1000",
                 "consumer_throughput": "900",
@@ -255,6 +282,8 @@ class TestShowRampResults:
             },
             {
                 "timestamp": "2026-02-01T12:00:00",
+                "run_id": "aaa111bbb222",
+                "consumer_impl": "confluent",
                 "step": "1",
                 "rate_target": "1000",
                 "consumer_throughput": "980",
@@ -276,6 +305,8 @@ class TestShowRampResults:
         rows = [
             {
                 "timestamp": "2026-02-01T14:30:05",
+                "run_id": "aaa111bbb222",
+                "consumer_impl": "confluent",
                 "step": "1",
                 "rate_target": "2000",
                 "consumer_throughput": "1900",
@@ -298,6 +329,8 @@ class TestShowRampResults:
             # 2 stable, 1 growing → dominant = stable
             {
                 "timestamp": "2026-02-01T14:30:05",
+                "run_id": "aaa111bbb222",
+                "consumer_impl": "confluent",
                 "step": "1",
                 "rate_target": "1000",
                 "consumer_throughput": "900",
@@ -306,6 +339,8 @@ class TestShowRampResults:
             },
             {
                 "timestamp": "2026-02-01T14:30:10",
+                "run_id": "aaa111bbb222",
+                "consumer_impl": "confluent",
                 "step": "1",
                 "rate_target": "1000",
                 "consumer_throughput": "920",
@@ -314,6 +349,8 @@ class TestShowRampResults:
             },
             {
                 "timestamp": "2026-02-01T14:30:15",
+                "run_id": "aaa111bbb222",
+                "consumer_impl": "confluent",
                 "step": "1",
                 "rate_target": "1000",
                 "consumer_throughput": "950",
@@ -326,6 +363,144 @@ class TestShowRampResults:
         output = capsys.readouterr().out
         # Dominant is stable, so saturation should NOT be reported
         assert "Not reached" in output
+
+
+# ==============================================================================
+# _show_ramp_results — run_id filtering and consumer_impl display
+# ==============================================================================
+
+
+class TestShowRampRunFiltering:
+    """Tests for run_id-based filtering and consumer_impl display."""
+
+    def _make_multi_run_rows(self):
+        """Create rows from two separate runs with different run_ids."""
+        return [
+            # Run 1: confluent, older timestamps
+            {
+                "timestamp": "2026-01-15T10:00:05",
+                "run_id": "run1_aaa111",
+                "consumer_impl": "confluent",
+                "step": "1",
+                "rate_target": "1000",
+                "consumer_throughput": "950",
+                "total_lag": "20",
+                "lag_trend": "stable",
+            },
+            {
+                "timestamp": "2026-01-15T10:00:10",
+                "run_id": "run1_aaa111",
+                "consumer_impl": "confluent",
+                "step": "2",
+                "rate_target": "2000",
+                "consumer_throughput": "1800",
+                "total_lag": "200",
+                "lag_trend": "growing",
+            },
+            # Run 2: kafka_python, newer timestamps
+            {
+                "timestamp": "2026-02-01T14:00:05",
+                "run_id": "run2_bbb222",
+                "consumer_impl": "kafka_python",
+                "step": "1",
+                "rate_target": "500",
+                "consumer_throughput": "490",
+                "total_lag": "10",
+                "lag_trend": "stable",
+            },
+            {
+                "timestamp": "2026-02-01T14:00:10",
+                "run_id": "run2_bbb222",
+                "consumer_impl": "kafka_python",
+                "step": "2",
+                "rate_target": "1000",
+                "consumer_throughput": "980",
+                "total_lag": "15",
+                "lag_trend": "stable",
+            },
+        ]
+
+    def test_latest_run_shown_by_default(self, tmp_path, capsys):
+        """Without --all, only the latest run (by timestamp) is shown."""
+        rows = self._make_multi_run_rows()
+        filepath = _write_ramp_csv(tmp_path, rows)
+        _show_ramp_results(filepath, since=None, until=None, summary=False)
+        output = capsys.readouterr().out
+        # Run 2 (kafka_python) has rate targets 500 and 1000
+        assert "500" in output
+        # Run 1 had rate target 2000 — should NOT appear
+        assert "2.0K" not in output
+
+    def test_all_flag_shows_all_runs(self, tmp_path, capsys):
+        """With all_runs=True, all runs are shown."""
+        rows = self._make_multi_run_rows()
+        filepath = _write_ramp_csv(tmp_path, rows)
+        _show_ramp_results(filepath, since=None, until=None, summary=False, all_runs=True)
+        output = capsys.readouterr().out
+        # Both runs should appear — run 1 had 2K rate target, run 2 had 500
+        assert "2.0K" in output
+        assert "500" in output
+
+    def test_all_flag_shows_consumer_in_titles(self, tmp_path, capsys):
+        """With --all and multiple runs, each table title shows consumer_impl."""
+        rows = self._make_multi_run_rows()
+        filepath = _write_ramp_csv(tmp_path, rows)
+        _show_ramp_results(filepath, since=None, until=None, summary=False, all_runs=True)
+        output = capsys.readouterr().out
+        # Each run gets its own table with consumer_impl in the title
+        assert "confluent" in output
+        assert "kafka_python" in output
+
+    def test_consumer_impl_in_title(self, tmp_path, capsys):
+        """Single run shows consumer_impl in the table title."""
+        rows = [
+            {
+                "timestamp": "2026-02-01T14:30:05",
+                "run_id": "aaa111bbb222",
+                "consumer_impl": "confluent",
+                "step": "1",
+                "rate_target": "1000",
+                "consumer_throughput": "980",
+                "total_lag": "15",
+                "lag_trend": "stable",
+            },
+        ]
+        filepath = _write_ramp_csv(tmp_path, rows)
+        _show_ramp_results(filepath, since=None, until=None, summary=False)
+        output = capsys.readouterr().out
+        # Title should include the consumer impl
+        assert "confluent" in output
+
+    def test_single_run_no_consumer_column(self, tmp_path, capsys):
+        """Single run does not show a Consumer column."""
+        rows = [
+            {
+                "timestamp": "2026-02-01T14:30:05",
+                "run_id": "aaa111bbb222",
+                "consumer_impl": "confluent",
+                "step": "1",
+                "rate_target": "1000",
+                "consumer_throughput": "980",
+                "total_lag": "15",
+                "lag_trend": "stable",
+            },
+        ]
+        filepath = _write_ramp_csv(tmp_path, rows)
+        _show_ramp_results(filepath, since=None, until=None, summary=False)
+        output = capsys.readouterr().out
+        # "Consumer" header should NOT appear for single run
+        assert "Consumer" not in output
+
+    def test_all_flag_via_cli(self, tmp_path):
+        """--all flag is passed through benchmark_show to _show_ramp_results."""
+        rows = self._make_multi_run_rows()
+        filepath = _write_ramp_csv(tmp_path, rows)
+        app = _make_show_app()
+        result = runner.invoke(app, ["--ramp", "--all", "--file", str(filepath)])
+        assert result.exit_code == 0
+        # Both consumer impls should appear
+        assert "confluent" in result.output
+        assert "kafka_python" in result.output
 
 
 # ==============================================================================

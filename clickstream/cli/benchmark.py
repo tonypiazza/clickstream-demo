@@ -14,6 +14,7 @@ import re
 import subprocess
 import sys
 import time
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any, Optional
@@ -848,6 +849,9 @@ def benchmark_show(
     ] = None,
     ramp: Annotated[bool, typer.Option("--ramp", help="Show ramp test results")] = False,
     run: Annotated[bool, typer.Option("--run", help="Show run test results (default)")] = False,
+    all_runs: Annotated[
+        bool, typer.Option("--all", help="Show all runs instead of latest (ramp only)")
+    ] = False,
     environment: Annotated[
         Optional[str],
         typer.Option("--environment", "-e", help="Filter by environment (local/aiven)"),
@@ -871,7 +875,8 @@ def benchmark_show(
 
     Examples:
         clickstream benchmark show                        # Show run results (default)
-        clickstream benchmark show --ramp                 # Show ramp results
+        clickstream benchmark show --ramp                 # Show ramp results (latest run)
+        clickstream benchmark show --ramp --all           # Show all ramp runs
         clickstream benchmark show --summary              # Include summary statistics
         clickstream benchmark show -e aiven               # Filter to Aiven only
         clickstream benchmark show --since 7d             # Last 7 days
@@ -893,7 +898,7 @@ def benchmark_show(
         )
 
     if show_ramp:
-        _show_ramp_results(file, since, until, summary)
+        _show_ramp_results(file, since, until, summary, all_runs=all_runs)
     else:
         _show_run_results(file, environment, since, until, summary)
 
@@ -1055,6 +1060,7 @@ def _show_ramp_results(
     since: Optional[str],
     until: Optional[str],
     summary: bool,
+    all_runs: bool = False,
 ) -> None:
     """Display benchmark ramp results with per-step aggregation and saturation analysis."""
     # Check file exists
@@ -1101,108 +1107,152 @@ def _show_ramp_results(
         print(f"{C.BRIGHT_YELLOW}{I.WARN} No results match the specified filters{C.RESET}")
         raise typer.Exit(0)
 
-    # Aggregate samples per step
-    steps: dict[int, dict] = {}
-    for row in filtered_rows:
-        try:
-            step_num = int(row["step"])
-            rate_target = int(row["rate_target"])
-            throughput = int(row["consumer_throughput"])
-            total_lag = int(row["total_lag"])
-            trend = row.get("lag_trend", "unknown")
-        except (ValueError, KeyError):
+    # Filter to latest run unless --all is specified
+    has_run_id = "run_id" in headers
+    if has_run_id and not all_runs:
+        # Find the latest run_id by max timestamp
+        latest_run_id: Optional[str] = None
+        latest_ts = ""
+        for row in filtered_rows:
+            rid = row.get("run_id", "")
+            ts = row.get("timestamp", "")
+            if rid and ts > latest_ts:
+                latest_ts = ts
+                latest_run_id = rid
+        if latest_run_id:
+            filtered_rows = [r for r in filtered_rows if r.get("run_id") == latest_run_id]
+
+    # Group rows by run_id for rendering
+    if has_run_id:
+        run_groups: dict[str, list[dict[str, str]]] = {}
+        for row in filtered_rows:
+            rid = row.get("run_id", "")
+            if rid not in run_groups:
+                run_groups[rid] = []
+            run_groups[rid].append(row)
+        # Sort by earliest timestamp in each group
+        sorted_run_ids = sorted(
+            run_groups, key=lambda rid: min(r.get("timestamp", "") for r in run_groups[rid])
+        )
+    else:
+        # No run_id column — treat all rows as a single run
+        run_groups = {"": filtered_rows}
+        sorted_run_ids = [""]
+
+    # Render one table per run
+    for run_id_key in sorted_run_ids:
+        run_rows = run_groups[run_id_key]
+
+        # Determine consumer_impl for this run's title
+        impl_values = {r.get("consumer_impl", "") for r in run_rows}
+        impl_values.discard("")
+        run_impl = impl_values.pop() if len(impl_values) == 1 else None
+
+        # Aggregate samples per step
+        steps: dict[int, dict] = {}
+        for row in run_rows:
+            try:
+                step_num = int(row["step"])
+                rate_target = int(row["rate_target"])
+                throughput = int(row["consumer_throughput"])
+                total_lag = int(row["total_lag"])
+                trend = row.get("lag_trend", "unknown")
+            except (ValueError, KeyError):
+                continue
+
+            if step_num not in steps:
+                steps[step_num] = {
+                    "rate_target": rate_target,
+                    "throughputs": [],
+                    "lags": [],
+                    "trends": [],
+                    "sample_count": 0,
+                }
+
+            steps[step_num]["throughputs"].append(throughput)
+            steps[step_num]["lags"].append(total_lag)
+            steps[step_num]["trends"].append(trend)
+            steps[step_num]["sample_count"] += 1
+
+        if not steps:
             continue
 
-        if step_num not in steps:
-            steps[step_num] = {
-                "rate_target": rate_target,
-                "throughputs": [],
-                "lags": [],
-                "trends": [],
-                "sample_count": 0,
-            }
-
-        steps[step_num]["throughputs"].append(throughput)
-        steps[step_num]["lags"].append(total_lag)
-        steps[step_num]["trends"].append(trend)
-        steps[step_num]["sample_count"] += 1
-
-    if not steps:
-        print(f"{C.BRIGHT_RED}{I.CROSS} No valid ramp data in {file}{C.RESET}")
-        raise typer.Exit(1)
-
-    # Build table
-    console = Console()
-    table = Table(title=f"Ramp Results ({file})", show_header=True, header_style="bold")
-    table.add_column("Step", justify="right")
-    table.add_column("Rate Target", justify="right")
-    table.add_column("Avg Throughput", justify="right")
-    table.add_column("Final Lag", justify="right")
-    table.add_column("Trend", justify="left")
-    table.add_column("Samples", justify="right")
-
-    # Detect saturation point: first step where dominant trend is "growing"
-    saturation_rate: Optional[int] = None
-    peak_sustainable_rate: Optional[int] = None
-
-    trend_icons = {
-        "growing": "[bright_red]↑ growing[/]",
-        "stable": "[bright_green]→ stable[/]",
-        "shrinking": "[bright_cyan]↓ shrinking[/]",
-        "unknown": "[dim]? unknown[/]",
-    }
-
-    for step_num in sorted(steps):
-        step_data = steps[step_num]
-        rate_target = step_data["rate_target"]
-        avg_tp = sum(step_data["throughputs"]) // len(step_data["throughputs"])
-        final_lag = step_data["lags"][-1]
-        # Dominant trend = most common in the step's samples
-        trend_counts: dict[str, int] = {}
-        for t in step_data["trends"]:
-            trend_counts[t] = trend_counts.get(t, 0) + 1
-        dominant_trend = max(trend_counts, key=lambda k: trend_counts[k])
-
-        # Track saturation
-        if dominant_trend == "growing" and saturation_rate is None:
-            saturation_rate = rate_target
-        if dominant_trend in ("stable", "shrinking"):
-            peak_sustainable_rate = rate_target
-
-        table.add_row(
-            str(step_num),
-            f"{_format_abbreviated(rate_target)}/s",
-            f"{_format_abbreviated(avg_tp)}/s",
-            f"{final_lag:,}",
-            trend_icons.get(dominant_trend, dominant_trend),
-            str(step_data["sample_count"]),
-        )
-
-    print()
-    console.print(table)
-
-    # Summary
-    if summary or True:  # Always show saturation analysis for ramp
-        print()
-        if saturation_rate is not None:
-            print(
-                f"  {C.BOLD}Saturation point:{C.RESET}  "
-                f"{C.BRIGHT_YELLOW}{saturation_rate:,} events/sec{C.RESET}"
-            )
+        # Build table
+        console = Console()
+        if run_impl:
+            title = f"Ramp Results \u2014 {run_impl} ({file})"
         else:
-            print(
-                f"  {C.BOLD}Saturation point:{C.RESET}  "
-                f"{C.BRIGHT_GREEN}Not reached within test range{C.RESET}"
+            title = f"Ramp Results ({file})"
+        table = Table(title=title, show_header=True, header_style="bold")
+        table.add_column("Step", justify="right")
+        table.add_column("Rate Target", justify="right")
+        table.add_column("Avg Throughput", justify="right")
+        table.add_column("Final Lag", justify="right")
+        table.add_column("Trend", justify="left")
+        table.add_column("Samples", justify="right")
+
+        # Detect saturation point: first step where dominant trend is "growing"
+        saturation_rate: Optional[int] = None
+        peak_sustainable_rate: Optional[int] = None
+
+        trend_icons = {
+            "growing": "[bright_red]\u2191 growing[/]",
+            "stable": "[bright_green]\u2192 stable[/]",
+            "shrinking": "[bright_cyan]\u2193 shrinking[/]",
+            "unknown": "[dim]? unknown[/]",
+        }
+
+        for step_num in sorted(steps):
+            step_data = steps[step_num]
+            rate_target = step_data["rate_target"]
+            avg_tp = sum(step_data["throughputs"]) // len(step_data["throughputs"])
+            final_lag = step_data["lags"][-1]
+            # Dominant trend = most common in the step's samples
+            trend_counts: dict[str, int] = {}
+            for t in step_data["trends"]:
+                trend_counts[t] = trend_counts.get(t, 0) + 1
+            dominant_trend = max(trend_counts, key=lambda k: trend_counts[k])
+
+            # Track saturation
+            if dominant_trend == "growing" and saturation_rate is None:
+                saturation_rate = rate_target
+            if dominant_trend in ("stable", "shrinking"):
+                peak_sustainable_rate = rate_target
+
+            table.add_row(
+                str(step_num),
+                f"{_format_abbreviated(rate_target)}/s",
+                f"{_format_abbreviated(avg_tp)}/s",
+                f"{final_lag:,}",
+                trend_icons.get(dominant_trend, dominant_trend),
+                str(step_data["sample_count"]),
             )
 
-        if peak_sustainable_rate is not None:
-            print(
-                f"  {C.BOLD}Peak sustainable:{C.RESET}   "
-                f"{C.WHITE}{peak_sustainable_rate:,} events/sec{C.RESET}"
-            )
+        print()
+        console.print(table)
 
-        print(f"  {C.BOLD}Total samples:{C.RESET}     {len(filtered_rows)}")
-        print(f"  {C.BOLD}Steps completed:{C.RESET}   {len(steps)}")
+        # Summary
+        if summary or True:  # Always show saturation analysis for ramp
+            print()
+            if saturation_rate is not None:
+                print(
+                    f"  {C.BOLD}Saturation point:{C.RESET}  "
+                    f"{C.BRIGHT_YELLOW}{saturation_rate:,} events/sec{C.RESET}"
+                )
+            else:
+                print(
+                    f"  {C.BOLD}Saturation point:{C.RESET}  "
+                    f"{C.BRIGHT_GREEN}Not reached within test range{C.RESET}"
+                )
+
+            if peak_sustainable_rate is not None:
+                print(
+                    f"  {C.BOLD}Peak sustainable:{C.RESET}   "
+                    f"{C.WHITE}{peak_sustainable_rate:,} events/sec{C.RESET}"
+                )
+
+            print(f"  {C.BOLD}Total samples:{C.RESET}     {len(run_rows)}")
+            print(f"  {C.BOLD}Steps completed:{C.RESET}   {len(steps)}")
 
     print()
 
@@ -1603,6 +1653,9 @@ def benchmark_ramp(
     # Accumulate (timestamp, total_lag) tuples for inline trend calculation
     lag_samples: list[tuple[float, int]] = []
 
+    # Unique run identifier for this ramp test
+    run_id = uuid.uuid4().hex[:12]
+
     try:
         with PgCounter() as pg:
             # Reconnect after schema reset
@@ -1675,6 +1728,8 @@ def benchmark_ramp(
                     timestamp = datetime.now().isoformat(timespec="seconds")
                     row: dict[str, str] = {
                         "timestamp": timestamp,
+                        "run_id": run_id,
+                        "consumer_impl": effective_impl,
                         "step": str(step_num),
                         "rate_target": str(current_rate),
                         "consumer_throughput": str(consumer_throughput),
@@ -1753,6 +1808,8 @@ def benchmark_ramp(
 
         base_cols = [
             "timestamp",
+            "run_id",
+            "consumer_impl",
             "step",
             "rate_target",
             "consumer_throughput",
