@@ -31,6 +31,7 @@ Usage (framework-managed sinks):
 
 import logging
 import time
+from collections import deque
 from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
@@ -125,6 +126,9 @@ class BatchMetrics:
         # Rebalance tracking — populated by record_rebalance()
         self._rebalance_events: list[float] = []
 
+        # Stage latency trend window — populated by process_batch()
+        self._stage_window: deque[dict[str, float]] = deque(maxlen=100)
+
     def process_batch(self, events: list[dict]) -> list[dict]:
         """
         Execute the 3-step pipeline with timing instrumentation.
@@ -210,6 +214,15 @@ class BatchMetrics:
         self._period_pg_sessions_ms += pg_sessions_ms
         self._period_total_ms += total_ms
 
+        # Append to sliding window for trend analysis
+        self._stage_window.append(
+            {
+                "pg_events_ms": pg_events_ms,
+                "valkey_ms": valkey_ms,
+                "pg_sessions_ms": pg_sessions_ms,
+            }
+        )
+
         # Store for proximity calculation in record_loop_timing()
         self._last_batch_total_ms = total_ms
 
@@ -294,6 +307,104 @@ class BatchMetrics:
         """
         self._rebalance_events.append(time.monotonic())
 
+    def get_backpressure_indicators(self) -> dict:
+        """
+        Return current period backpressure indicators for external reporting.
+
+        Designed to be called from the on_summary callback (before period
+        counters are reset) so indicators reflect the just-completed period.
+
+        Returns:
+            Dict with keys matching record_backpressure_sample() expectations:
+            - fill_ratio: float (0.0–1.0), average fill ratio this period
+            - poll_proximity: float, max proximity this period
+            - idle_ms: float, average idle ms this period
+            - rebalance_count: int, rebalances in last 5 minutes
+            - bottleneck_stage: str | None, worst trending stage name
+        """
+        # Fill ratio — average of period fill ratios
+        if self._period_fill_ratios:
+            fill_ratio = sum(self._period_fill_ratios) / len(self._period_fill_ratios)
+        else:
+            fill_ratio = 0.0
+
+        # Poll proximity — max seen this period
+        poll_proximity = self._period_max_proximity
+
+        # Idle ms — average this period
+        if self._period_loop_count > 0:
+            idle_ms = self._period_idle_ms / self._period_loop_count
+        else:
+            idle_ms = 0.0
+
+        # Rebalance count — events in last 5 minutes
+        now = time.monotonic()
+        rebalance_count = sum(1 for t in self._rebalance_events if now - t <= 300)
+
+        # Bottleneck stage — pick the stage with the steepest slope
+        bottleneck_stage = self._get_bottleneck_stage()
+
+        return {
+            "fill_ratio": fill_ratio,
+            "poll_proximity": poll_proximity,
+            "idle_ms": idle_ms,
+            "rebalance_count": rebalance_count,
+            "bottleneck_stage": bottleneck_stage,
+        }
+
+    def _get_bottleneck_stage(self) -> str | None:
+        """
+        Return the name of the pipeline stage with the steepest upward trend.
+
+        Uses the sliding window of per-batch stage timings. Returns the stage
+        with the highest slope (above the 0.5 ms/batch threshold), or None if
+        no stages are trending up.
+
+        Returns:
+            Stage name (e.g., "valkey", "pg_events", "pg_sessions") or None.
+        """
+        if len(self._stage_window) < 2:
+            return None
+
+        worst_stage = None
+        worst_slope = 0.5  # threshold — must exceed this
+
+        for stage in ("pg_events_ms", "valkey_ms", "pg_sessions_ms"):
+            values = [s[stage] for s in self._stage_window]
+            slope = _linear_slope(values)
+            if slope > worst_slope:
+                worst_slope = slope
+                worst_stage = stage.replace("_ms", "")
+
+        return worst_stage
+
+    def _compute_stage_trends(self) -> list[str]:
+        """
+        Compute linear regression trends for each pipeline stage.
+
+        Analyzes the sliding window of per-stage timings to detect stages
+        whose latency is increasing. A stage is flagged when its slope
+        exceeds 0.5 ms/batch (significantly increasing).
+
+        Returns:
+            List of trend description strings for stages trending up,
+            e.g. ["valkey trending up (3ms → 12ms)"]. Empty if no stages
+            are trending up or if the window has fewer than 2 samples.
+        """
+        if len(self._stage_window) < 2:
+            return []
+
+        trends: list[str] = []
+        for stage in ("pg_events_ms", "valkey_ms", "pg_sessions_ms"):
+            values = [s[stage] for s in self._stage_window]
+            slope = _linear_slope(values)
+            if slope > 0.5:
+                first_ms = values[0]
+                last_ms = values[-1]
+                label = stage.replace("_ms", "")
+                trends.append(f"{label} trending up ({first_ms:.0f}ms → {last_ms:.0f}ms)")
+        return trends
+
     def _log_summary(self, now: float) -> None:
         """Log periodic throughput summary and reset period counters."""
         elapsed = now - self._last_summary_time
@@ -359,6 +470,11 @@ class BatchMetrics:
                 "%d rebalances in last 5 minutes — consumer group unstable",
                 recent_rebalances,
             )
+
+        # Check for stage latency trends
+        stage_trends = self._compute_stage_trends()
+        if stage_trends:
+            self._log.warning("Stage trends: %s", " | ".join(stage_trends))
 
         # Log cumulative totals
         total_elapsed = now - self._start_time
@@ -455,6 +571,11 @@ class BatchMetrics:
                 len(self._rebalance_events),
             )
 
+        # Log final stage latency trends if window has data
+        stage_trends = self._compute_stage_trends()
+        if stage_trends:
+            self._log.warning("Final stage trends: %s", " | ".join(stage_trends))
+
 
 def _precision(ms: float) -> int:
     """Return decimal precision for millisecond values.
@@ -469,3 +590,33 @@ def _precision(ms: float) -> int:
         return 1
     else:
         return 2
+
+
+def _linear_slope(values: list[float]) -> float:
+    """Compute the linear regression slope of values over their index.
+
+    Uses simple least-squares regression where x = 0, 1, 2, ... (batch index)
+    and y = the stage timing values. The slope represents the change in
+    milliseconds per batch.
+
+    Args:
+        values: List of float values (at least 2 elements required).
+
+    Returns:
+        Slope in units-per-index (ms/batch). Returns 0.0 if fewer than 2
+        values or if the denominator is zero.
+    """
+    n = len(values)
+    if n < 2:
+        return 0.0
+
+    sum_x = n * (n - 1) / 2  # sum of 0..n-1
+    sum_x2 = n * (n - 1) * (2 * n - 1) / 6  # sum of squares of 0..n-1
+    sum_y = sum(values)
+    sum_xy = sum(i * v for i, v in enumerate(values))
+
+    denominator = n * sum_x2 - sum_x * sum_x
+    if denominator == 0:
+        return 0.0
+
+    return (n * sum_xy - sum_x * sum_y) / denominator

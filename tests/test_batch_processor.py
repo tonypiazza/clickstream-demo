@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from clickstream.consumers.batch_processor import BatchMetrics, _precision
+from clickstream.consumers.batch_processor import BatchMetrics, _linear_slope, _precision
 
 # ==============================================================================
 # Helpers
@@ -904,3 +904,467 @@ class TestRebalanceFinalSummary:
         assert len(loop_msgs) == 1
         # Total = 3 (1 old + 2 recent)
         assert "rebalances=3" in loop_msgs[0]
+
+
+# ==============================================================================
+# _linear_slope helper — Phase 4e
+# ==============================================================================
+
+
+class TestLinearSlope:
+    """Tests for the _linear_slope helper function."""
+
+    def test_empty_list_returns_zero(self):
+        assert _linear_slope([]) == 0.0
+
+    def test_single_value_returns_zero(self):
+        assert _linear_slope([5.0]) == 0.0
+
+    def test_constant_values_zero_slope(self):
+        """All identical values should give slope ≈ 0."""
+        assert _linear_slope([10.0, 10.0, 10.0, 10.0]) == pytest.approx(0.0)
+
+    def test_linearly_increasing(self):
+        """Perfectly linear increase: y = 2x → slope = 2."""
+        values = [0.0, 2.0, 4.0, 6.0, 8.0]
+        assert _linear_slope(values) == pytest.approx(2.0)
+
+    def test_linearly_decreasing(self):
+        """Perfectly linear decrease: y = 10 - x → slope = -1."""
+        values = [10.0, 9.0, 8.0, 7.0, 6.0]
+        assert _linear_slope(values) == pytest.approx(-1.0)
+
+    def test_two_values_positive(self):
+        """Two values: slope = difference."""
+        assert _linear_slope([3.0, 7.0]) == pytest.approx(4.0)
+
+    def test_two_values_negative(self):
+        """Two values: slope = difference (negative)."""
+        assert _linear_slope([7.0, 3.0]) == pytest.approx(-4.0)
+
+    def test_noisy_increasing_positive_slope(self):
+        """Noisy but generally increasing values → positive slope."""
+        values = [1.0, 3.0, 2.0, 5.0, 4.0, 7.0, 6.0, 9.0]
+        slope = _linear_slope(values)
+        assert slope > 0.5
+
+
+# ==============================================================================
+# Stage latency trends — Phase 4e
+# ==============================================================================
+
+
+class TestStageWindowAccumulation:
+    """Tests for stage window data collection in process_batch."""
+
+    def test_stage_window_starts_empty(self):
+        """Stage window deque starts empty."""
+        bm = _make_batch_metrics()
+        assert len(bm._stage_window) == 0
+
+    def test_process_batch_appends_to_window(self):
+        """Each process_batch appends stage timings to the window."""
+        bm = _make_batch_metrics()
+        bm.process_batch([{"event": "test1"}])
+        assert len(bm._stage_window) == 1
+        entry = bm._stage_window[0]
+        assert "pg_events_ms" in entry
+        assert "valkey_ms" in entry
+        assert "pg_sessions_ms" in entry
+
+    def test_window_maxlen_100(self):
+        """Stage window is bounded at 100 entries."""
+        bm = _make_batch_metrics()
+        for i in range(110):
+            bm.process_batch([{"event": f"test{i}"}])
+        assert len(bm._stage_window) == 100
+
+    def test_window_values_are_positive(self):
+        """Stage timing values are non-negative floats."""
+        bm = _make_batch_metrics()
+        bm.process_batch([{"event": "test"}])
+        entry = bm._stage_window[0]
+        for key in ("pg_events_ms", "valkey_ms", "pg_sessions_ms"):
+            assert isinstance(entry[key], float)
+            assert entry[key] >= 0
+
+
+class TestComputeStageTrends:
+    """Tests for _compute_stage_trends method."""
+
+    def test_empty_window_returns_no_trends(self):
+        """No trends when window is empty."""
+        bm = _make_batch_metrics()
+        assert bm._compute_stage_trends() == []
+
+    def test_single_entry_returns_no_trends(self):
+        """No trends with only one sample (need >= 2)."""
+        bm = _make_batch_metrics()
+        bm._stage_window.append({"pg_events_ms": 5.0, "valkey_ms": 3.0, "pg_sessions_ms": 4.0})
+        assert bm._compute_stage_trends() == []
+
+    def test_stable_stages_no_trends(self):
+        """Constant stage timings → no trending warnings."""
+        bm = _make_batch_metrics()
+        for _ in range(10):
+            bm._stage_window.append({"pg_events_ms": 5.0, "valkey_ms": 3.0, "pg_sessions_ms": 4.0})
+        assert bm._compute_stage_trends() == []
+
+    def test_valkey_trending_up(self):
+        """Valkey increasing by 1ms/batch → slope=1.0 > 0.5 threshold."""
+        bm = _make_batch_metrics()
+        for i in range(10):
+            bm._stage_window.append(
+                {"pg_events_ms": 5.0, "valkey_ms": 3.0 + i, "pg_sessions_ms": 4.0}
+            )
+        trends = bm._compute_stage_trends()
+        assert len(trends) == 1
+        assert "valkey trending up" in trends[0]
+
+    def test_pg_events_trending_up(self):
+        """pg_events increasing → flagged."""
+        bm = _make_batch_metrics()
+        for i in range(10):
+            bm._stage_window.append(
+                {"pg_events_ms": 5.0 + i * 2, "valkey_ms": 3.0, "pg_sessions_ms": 4.0}
+            )
+        trends = bm._compute_stage_trends()
+        assert len(trends) == 1
+        assert "pg_events trending up" in trends[0]
+
+    def test_pg_sessions_trending_up(self):
+        """pg_sessions increasing → flagged."""
+        bm = _make_batch_metrics()
+        for i in range(10):
+            bm._stage_window.append(
+                {"pg_events_ms": 5.0, "valkey_ms": 3.0, "pg_sessions_ms": 4.0 + i}
+            )
+        trends = bm._compute_stage_trends()
+        assert len(trends) == 1
+        assert "pg_sessions trending up" in trends[0]
+
+    def test_multiple_stages_trending_up(self):
+        """Multiple stages can trend up simultaneously."""
+        bm = _make_batch_metrics()
+        for i in range(10):
+            bm._stage_window.append(
+                {"pg_events_ms": 5.0 + i, "valkey_ms": 3.0 + i, "pg_sessions_ms": 4.0}
+            )
+        trends = bm._compute_stage_trends()
+        assert len(trends) == 2
+        labels = " ".join(trends)
+        assert "pg_events trending up" in labels
+        assert "valkey trending up" in labels
+
+    def test_decreasing_stage_not_flagged(self):
+        """A stage with decreasing latency should not be flagged."""
+        bm = _make_batch_metrics()
+        for i in range(10):
+            bm._stage_window.append(
+                {"pg_events_ms": 20.0 - i, "valkey_ms": 3.0, "pg_sessions_ms": 4.0}
+            )
+        assert bm._compute_stage_trends() == []
+
+    def test_slope_below_threshold_not_flagged(self):
+        """Slope of exactly 0.5 should not be flagged (threshold is > 0.5)."""
+        bm = _make_batch_metrics()
+        # slope = 0.5 ms/batch
+        for i in range(10):
+            bm._stage_window.append(
+                {"pg_events_ms": 5.0, "valkey_ms": 3.0 + i * 0.5, "pg_sessions_ms": 4.0}
+            )
+        trends = bm._compute_stage_trends()
+        assert len(trends) == 0
+
+    def test_trend_includes_first_and_last_ms(self):
+        """Trend message includes first and last timing values."""
+        bm = _make_batch_metrics()
+        for i in range(10):
+            bm._stage_window.append(
+                {"pg_events_ms": 5.0, "valkey_ms": 3.0 + i, "pg_sessions_ms": 4.0}
+            )
+        trends = bm._compute_stage_trends()
+        assert len(trends) == 1
+        # First value: 3ms, last value: 12ms
+        assert "3ms" in trends[0]
+        assert "12ms" in trends[0]
+
+
+class TestStageTrendsInPeriodicSummary:
+    """Tests for stage trend warnings in periodic summaries."""
+
+    def test_no_trend_warning_when_stable(self, caplog):
+        """No 'Stage trends' warning when all stages are stable."""
+        bm = _make_batch_metrics(summary_interval=0.01)
+
+        # Process enough batches with constant timings
+        for _ in range(5):
+            bm.process_batch([{"event": "test"}])
+
+        time.sleep(0.02)
+
+        with caplog.at_level(logging.WARNING):
+            bm.process_batch([{"event": "trigger"}])
+
+        trend_msgs = [r.message for r in caplog.records if "Stage trends:" in r.message]
+        assert len(trend_msgs) == 0
+
+    def test_trend_warning_when_stage_increasing(self, caplog):
+        """'Stage trends' WARNING logged when a stage latency is increasing."""
+        bm = _make_batch_metrics(summary_interval=0.01)
+
+        # First batch to initialize period counters
+        bm.process_batch([{"event": "test"}])
+
+        # Clear the window and inject increasing valkey timings
+        bm._stage_window.clear()
+        for i in range(10):
+            bm._stage_window.append(
+                {"pg_events_ms": 5.0, "valkey_ms": 3.0 + i * 2, "pg_sessions_ms": 4.0}
+            )
+
+        time.sleep(0.02)
+
+        with caplog.at_level(logging.WARNING):
+            # This appends one more entry but the slope is still strong
+            bm.process_batch([{"event": "trigger"}])
+
+        trend_msgs = [r.message for r in caplog.records if "Stage trends:" in r.message]
+        assert len(trend_msgs) == 1
+        assert "valkey trending up" in trend_msgs[0]
+
+
+class TestStageTrendsInFinalSummary:
+    """Tests for stage trend warnings in final summary."""
+
+    def test_no_trend_warning_when_stable(self, caplog):
+        """No 'Final stage trends' warning when all stages are stable."""
+        bm = _make_batch_metrics()
+
+        for _ in range(5):
+            bm.process_batch([{"event": "test"}])
+        bm.record_loop_timing(poll_ms=5.0, commit_ms=3.0, batch_size=800, max_batch_size=1000)
+
+        with caplog.at_level(logging.WARNING):
+            bm.log_final_summary()
+
+        trend_msgs = [r.message for r in caplog.records if "Final stage trends:" in r.message]
+        assert len(trend_msgs) == 0
+
+    def test_trend_warning_in_final_summary(self, caplog):
+        """'Final stage trends' WARNING logged when a stage latency is increasing."""
+        bm = _make_batch_metrics()
+
+        # Inject increasing pg_events timings
+        for i in range(10):
+            bm._stage_window.append(
+                {"pg_events_ms": 5.0 + i * 3, "valkey_ms": 3.0, "pg_sessions_ms": 4.0}
+            )
+
+        bm.process_batch([{"event": "test"}])
+        bm.record_loop_timing(poll_ms=5.0, commit_ms=3.0, batch_size=800, max_batch_size=1000)
+
+        with caplog.at_level(logging.WARNING):
+            bm.log_final_summary()
+
+        trend_msgs = [r.message for r in caplog.records if "Final stage trends:" in r.message]
+        assert len(trend_msgs) == 1
+        assert "pg_events trending up" in trend_msgs[0]
+
+
+# ==============================================================================
+# Backpressure indicators — Follow-up wiring
+# ==============================================================================
+
+
+class TestGetBackpressureIndicators:
+    """Tests for get_backpressure_indicators() method."""
+
+    def test_returns_all_expected_keys(self):
+        """Returned dict contains all 5 expected indicator keys."""
+        bm = _make_batch_metrics()
+        indicators = bm.get_backpressure_indicators()
+        assert set(indicators.keys()) == {
+            "fill_ratio",
+            "poll_proximity",
+            "idle_ms",
+            "rebalance_count",
+            "bottleneck_stage",
+        }
+
+    def test_defaults_when_no_data(self):
+        """All indicators default to zero/None when no data has been recorded."""
+        bm = _make_batch_metrics()
+        indicators = bm.get_backpressure_indicators()
+        assert indicators["fill_ratio"] == 0.0
+        assert indicators["poll_proximity"] == 0.0
+        assert indicators["idle_ms"] == 0.0
+        assert indicators["rebalance_count"] == 0
+        assert indicators["bottleneck_stage"] is None
+
+    def test_fill_ratio_average(self):
+        """fill_ratio is the average of period fill ratios."""
+        bm = _make_batch_metrics()
+        bm.process_batch([{"event": "test"}])
+        # Two loops with different fill ratios: 0.8 and 0.6 → avg = 0.7
+        bm.record_loop_timing(poll_ms=5.0, commit_ms=3.0, batch_size=800, max_batch_size=1000)
+        bm.record_loop_timing(poll_ms=5.0, commit_ms=3.0, batch_size=600, max_batch_size=1000)
+
+        indicators = bm.get_backpressure_indicators()
+        assert indicators["fill_ratio"] == pytest.approx(0.7)
+
+    def test_poll_proximity_is_period_max(self):
+        """poll_proximity returns the max proximity seen in the current period."""
+        bm = _make_batch_metrics(max_poll_interval_ms=1000)
+        bm.process_batch([{"event": "test"}])
+        # poll + batch + commit = 5 + ~0 + 3 = ~8ms → proximity ≈ 8/1000
+        # But _last_batch_total_ms is set by process_batch
+        bm.record_loop_timing(poll_ms=500.0, commit_ms=200.0, batch_size=800, max_batch_size=1000)
+
+        indicators = bm.get_backpressure_indicators()
+        # proximity = (500 + batch_ms + 200) / 1000 — should be > 0.7
+        assert indicators["poll_proximity"] > 0.0
+        assert indicators["poll_proximity"] == bm._period_max_proximity
+
+    def test_idle_ms_average(self):
+        """idle_ms is the average idle time across loops in the period."""
+        bm = _make_batch_metrics()
+        bm.process_batch([{"event": "test"}])
+        bm.record_loop_timing(
+            poll_ms=5.0, commit_ms=3.0, batch_size=800, max_batch_size=1000, idle_ms=10.0
+        )
+        bm.record_loop_timing(
+            poll_ms=5.0, commit_ms=3.0, batch_size=800, max_batch_size=1000, idle_ms=30.0
+        )
+
+        indicators = bm.get_backpressure_indicators()
+        assert indicators["idle_ms"] == pytest.approx(20.0)
+
+    def test_rebalance_count_recent_only(self):
+        """rebalance_count only counts rebalances in the last 5 minutes."""
+        bm = _make_batch_metrics()
+        # 2 recent rebalances
+        bm.record_rebalance()
+        bm.record_rebalance()
+        # 1 old rebalance (> 5 min ago)
+        now = time.monotonic()
+        bm._rebalance_events.insert(0, now - 400)
+
+        indicators = bm.get_backpressure_indicators()
+        assert indicators["rebalance_count"] == 2
+
+    def test_bottleneck_stage_none_when_stable(self):
+        """bottleneck_stage is None when no stages are trending up."""
+        bm = _make_batch_metrics()
+        for _ in range(10):
+            bm._stage_window.append({"pg_events_ms": 5.0, "valkey_ms": 3.0, "pg_sessions_ms": 4.0})
+
+        indicators = bm.get_backpressure_indicators()
+        assert indicators["bottleneck_stage"] is None
+
+    def test_bottleneck_stage_identifies_worst(self):
+        """bottleneck_stage returns the stage with the steepest upward trend."""
+        bm = _make_batch_metrics()
+        # valkey increasing by 2ms/batch, pg_events by 1ms/batch
+        for i in range(10):
+            bm._stage_window.append(
+                {"pg_events_ms": 5.0 + i, "valkey_ms": 3.0 + i * 2, "pg_sessions_ms": 4.0}
+            )
+
+        indicators = bm.get_backpressure_indicators()
+        assert indicators["bottleneck_stage"] == "valkey"
+
+    def test_bottleneck_stage_pg_events(self):
+        """bottleneck_stage returns pg_events when it has the steepest trend."""
+        bm = _make_batch_metrics()
+        for i in range(10):
+            bm._stage_window.append(
+                {"pg_events_ms": 5.0 + i * 3, "valkey_ms": 3.0, "pg_sessions_ms": 4.0}
+            )
+
+        indicators = bm.get_backpressure_indicators()
+        assert indicators["bottleneck_stage"] == "pg_events"
+
+    def test_bottleneck_stage_pg_sessions(self):
+        """bottleneck_stage returns pg_sessions when it has the steepest trend."""
+        bm = _make_batch_metrics()
+        for i in range(10):
+            bm._stage_window.append(
+                {"pg_events_ms": 5.0, "valkey_ms": 3.0, "pg_sessions_ms": 4.0 + i * 3}
+            )
+
+        indicators = bm.get_backpressure_indicators()
+        assert indicators["bottleneck_stage"] == "pg_sessions"
+
+    def test_indicators_reflect_period_state(self):
+        """Indicators reflect current period data, not cumulative."""
+        bm = _make_batch_metrics(summary_interval=0.01)
+
+        # Period 1: fill ratio 0.9
+        bm.process_batch([{"event": "test"}])
+        bm.record_loop_timing(
+            poll_ms=5.0, commit_ms=3.0, batch_size=900, max_batch_size=1000, idle_ms=50.0
+        )
+
+        time.sleep(0.02)
+        bm.process_batch([{"event": "test2"}])  # triggers summary + reset
+
+        # Period 2: fill ratio 0.5
+        bm.record_loop_timing(
+            poll_ms=5.0, commit_ms=3.0, batch_size=500, max_batch_size=1000, idle_ms=10.0
+        )
+
+        indicators = bm.get_backpressure_indicators()
+        assert indicators["fill_ratio"] == pytest.approx(0.5)
+        assert indicators["idle_ms"] == pytest.approx(10.0)
+
+    def test_bottleneck_stage_none_with_insufficient_window(self):
+        """bottleneck_stage is None when window has fewer than 2 entries."""
+        bm = _make_batch_metrics()
+        bm._stage_window.append({"pg_events_ms": 5.0, "valkey_ms": 3.0, "pg_sessions_ms": 4.0})
+
+        indicators = bm.get_backpressure_indicators()
+        assert indicators["bottleneck_stage"] is None
+
+
+class TestGetBottleneckStage:
+    """Tests for _get_bottleneck_stage helper method."""
+
+    def test_empty_window_returns_none(self):
+        """Returns None when window is empty."""
+        bm = _make_batch_metrics()
+        assert bm._get_bottleneck_stage() is None
+
+    def test_single_entry_returns_none(self):
+        """Returns None with only one sample."""
+        bm = _make_batch_metrics()
+        bm._stage_window.append({"pg_events_ms": 5.0, "valkey_ms": 3.0, "pg_sessions_ms": 4.0})
+        assert bm._get_bottleneck_stage() is None
+
+    def test_stable_stages_returns_none(self):
+        """Returns None when all stages are stable (no slope > 0.5)."""
+        bm = _make_batch_metrics()
+        for _ in range(10):
+            bm._stage_window.append({"pg_events_ms": 5.0, "valkey_ms": 3.0, "pg_sessions_ms": 4.0})
+        assert bm._get_bottleneck_stage() is None
+
+    def test_returns_steepest_stage(self):
+        """Returns the stage with the steepest slope when multiple are trending."""
+        bm = _make_batch_metrics()
+        # valkey slope=2, pg_events slope=1
+        for i in range(10):
+            bm._stage_window.append(
+                {"pg_events_ms": 5.0 + i, "valkey_ms": 3.0 + i * 2, "pg_sessions_ms": 4.0}
+            )
+        assert bm._get_bottleneck_stage() == "valkey"
+
+    def test_strips_ms_suffix(self):
+        """Returned stage name has _ms suffix removed."""
+        bm = _make_batch_metrics()
+        for i in range(10):
+            bm._stage_window.append(
+                {"pg_events_ms": 5.0, "valkey_ms": 3.0, "pg_sessions_ms": 4.0 + i * 2}
+            )
+        result = bm._get_bottleneck_stage()
+        assert result == "pg_sessions"
+        assert "_ms" not in result

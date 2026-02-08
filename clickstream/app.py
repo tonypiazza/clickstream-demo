@@ -141,10 +141,11 @@ lag_app = typer.Typer(
 )
 app.add_typer(lag_app, name="lag")
 
-from clickstream.cli.lag import lag_history, lag_show
+from clickstream.cli.lag import lag_history, lag_report, lag_show
 
 lag_app.command("show")(lag_show)
 lag_app.command("history")(lag_history)
+lag_app.command("report")(lag_report)
 
 
 # ==============================================================================

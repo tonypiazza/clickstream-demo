@@ -22,7 +22,7 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-from clickstream.cli.lag import _parse_window, lag_history, lag_show
+from clickstream.cli.lag import _parse_window, lag_history, lag_report, lag_show
 
 runner = CliRunner()
 
@@ -32,6 +32,7 @@ def _make_app():
     app = typer.Typer()
     app.command("show")(lag_show)
     app.command("history")(lag_history)
+    app.command("report")(lag_report)
     return app
 
 
@@ -244,3 +245,174 @@ class TestLagHistory:
         assert "error" in data
         assert data["group_id"] == "test-group"
         assert data["window"] == "5m"
+
+
+# ==============================================================================
+# lag report — Phase 4f
+# ==============================================================================
+
+_BACKPRESSURE_PATH = "clickstream.cli.lag.get_backpressure_report"
+
+
+class TestLagReport:
+    """Tests for the `lag report` command."""
+
+    @patch(_SETTINGS_PATH)
+    @patch(_BACKPRESSURE_PATH, return_value=None)
+    @patch(_TREND_PATH, return_value="unknown")
+    @patch(_HISTORY_PATH, return_value=[])
+    def test_no_data(self, mock_history, mock_trend, mock_bp, mock_settings):
+        """Shows warning when no data is available."""
+        mock_settings.return_value = _mock_settings()
+        app = _make_app()
+        result = runner.invoke(app, ["report"])
+        assert result.exit_code == 0
+        assert "No data available" in result.output
+
+    @patch(_SETTINGS_PATH)
+    @patch(_BACKPRESSURE_PATH)
+    @patch(_TREND_PATH, return_value="growing")
+    @patch(_HISTORY_PATH)
+    def test_with_data(self, mock_history, mock_trend, mock_bp, mock_settings):
+        """Shows backpressure table with all indicators."""
+        mock_settings.return_value = _mock_settings()
+        now = int(time.time())
+        mock_history.return_value = [
+            {"ts": now, "partitions": {0: 40000, 1: 5230}, "total": 45230},
+        ]
+        mock_bp.return_value = {
+            "fill_ratio": 0.98,
+            "poll_proximity": 0.32,
+            "idle_ms": 2.0,
+            "rebalance_count": 0,
+            "bottleneck_stage": "valkey (↑ 48%)",
+            "instance_count": 2,
+            "ts": now,
+        }
+        app = _make_app()
+        result = runner.invoke(app, ["report"])
+        assert result.exit_code == 0
+        assert "45,230" in result.output
+        assert "98%" in result.output
+        assert "0.32" in result.output
+        assert "2ms" in result.output
+        assert "valkey" in result.output
+
+    @patch(_SETTINGS_PATH)
+    @patch(_BACKPRESSURE_PATH)
+    @patch(_TREND_PATH, return_value="stable")
+    @patch(_HISTORY_PATH)
+    def test_json_output(self, mock_history, mock_trend, mock_bp, mock_settings):
+        """--json flag outputs valid JSON with correct structure."""
+        mock_settings.return_value = _mock_settings()
+        now = int(time.time())
+        mock_history.return_value = [
+            {"ts": now, "partitions": {0: 100}, "total": 100},
+        ]
+        mock_bp.return_value = {
+            "fill_ratio": 0.50,
+            "poll_proximity": 0.10,
+            "idle_ms": 80.0,
+            "rebalance_count": 1,
+            "bottleneck_stage": None,
+            "instance_count": 1,
+            "ts": now,
+        }
+        app = _make_app()
+        result = runner.invoke(app, ["report", "--json"])
+        assert result.exit_code == 0
+
+        data = json.loads(result.output)
+        assert data["group_id"] == "test-group"
+        assert data["consumer_lag"] == 100
+        assert data["lag_trend"] == "stable"
+        assert data["fill_ratio"] == 0.50
+        assert data["poll_proximity"] == 0.10
+        assert data["idle_ms"] == 80.0
+        assert data["rebalance_count"] == 1
+        assert data["bottleneck_stage"] is None
+        assert data["instance_count"] == 1
+
+    @patch(_SETTINGS_PATH)
+    @patch(_BACKPRESSURE_PATH, return_value=None)
+    @patch(_TREND_PATH, return_value="unknown")
+    @patch(_HISTORY_PATH, return_value=[])
+    def test_no_data_json(self, mock_history, mock_trend, mock_bp, mock_settings):
+        """--json with no data outputs JSON error object."""
+        mock_settings.return_value = _mock_settings()
+        app = _make_app()
+        result = runner.invoke(app, ["report", "--json"])
+        assert result.exit_code == 0
+
+        data = json.loads(result.output)
+        assert "error" in data
+        assert data["group_id"] == "test-group"
+
+    @patch(_SETTINGS_PATH)
+    @patch(_BACKPRESSURE_PATH, return_value=None)
+    @patch(_TREND_PATH, return_value="growing")
+    @patch(_HISTORY_PATH)
+    def test_lag_only_no_backpressure(self, mock_history, mock_trend, mock_bp, mock_settings):
+        """Shows table with lag data but 'no data' for backpressure indicators."""
+        mock_settings.return_value = _mock_settings()
+        now = int(time.time())
+        mock_history.return_value = [
+            {"ts": now, "partitions": {0: 500}, "total": 500},
+        ]
+        app = _make_app()
+        result = runner.invoke(app, ["report"])
+        assert result.exit_code == 0
+        # Lag should be shown
+        assert "500" in result.output
+        # Backpressure fields should show "no data"
+        assert "no data" in result.output
+
+    @patch(_SETTINGS_PATH)
+    @patch(_BACKPRESSURE_PATH)
+    @patch(_TREND_PATH, return_value="stable")
+    @patch(_HISTORY_PATH)
+    def test_saturated_fill_ratio_label(self, mock_history, mock_trend, mock_bp, mock_settings):
+        """Fill ratio >= 95% shows 'saturated' status label."""
+        mock_settings.return_value = _mock_settings()
+        now = int(time.time())
+        mock_history.return_value = [
+            {"ts": now, "partitions": {0: 100}, "total": 100},
+        ]
+        mock_bp.return_value = {
+            "fill_ratio": 0.99,
+            "poll_proximity": 0.10,
+            "idle_ms": 50.0,
+            "rebalance_count": 0,
+            "bottleneck_stage": None,
+            "instance_count": 1,
+            "ts": now,
+        }
+        app = _make_app()
+        result = runner.invoke(app, ["report"])
+        assert result.exit_code == 0
+        assert "saturated" in result.output
+
+    @patch(_SETTINGS_PATH)
+    @patch(_BACKPRESSURE_PATH)
+    @patch(_TREND_PATH, return_value="stable")
+    @patch(_HISTORY_PATH)
+    def test_healthy_proximity_label(self, mock_history, mock_trend, mock_bp, mock_settings):
+        """Poll proximity <= 0.7 shows 'healthy' status label."""
+        mock_settings.return_value = _mock_settings()
+        now = int(time.time())
+        mock_history.return_value = [
+            {"ts": now, "partitions": {0: 100}, "total": 100},
+        ]
+        mock_bp.return_value = {
+            "fill_ratio": 0.50,
+            "poll_proximity": 0.25,
+            "idle_ms": 50.0,
+            "rebalance_count": 0,
+            "bottleneck_stage": None,
+            "instance_count": 1,
+            "ts": now,
+        }
+        app = _make_app()
+        result = runner.invoke(app, ["report"])
+        assert result.exit_code == 0
+        assert "healthy" in result.output

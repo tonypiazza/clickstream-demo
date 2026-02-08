@@ -28,8 +28,10 @@ logger = logging.getLogger(__name__)
 PRODUCER_MESSAGES_KEY = "producer:messages_produced"
 STATS_SAMPLES_KEY_PREFIX = "clickstream:stats:samples:"
 LAG_SAMPLES_KEY_PREFIX = "clickstream:lag:samples:"
+BACKPRESSURE_KEY_PREFIX = "clickstream:backpressure:"
 STATS_TTL_SECONDS = 3600  # 1 hour
 LAG_TTL_SECONDS = 3600  # 1 hour
+BACKPRESSURE_TTL_SECONDS = 300  # 5 minutes
 
 
 class PipelineMetrics:
@@ -348,6 +350,124 @@ class PipelineMetrics:
         else:
             return "shrinking"
 
+    # ==========================================================================
+    # Backpressure Indicator Tracking
+    # ==========================================================================
+
+    def record_backpressure_sample(
+        self,
+        consumer_group: str,
+        instance: int,
+        indicators: dict,
+    ) -> None:
+        """
+        Record a backpressure indicators sample in Valkey.
+
+        Called from the consumer's periodic summary callback to push the
+        latest BatchMetrics indicators into Valkey for CLI retrieval.
+
+        Args:
+            consumer_group: Kafka consumer group ID (e.g., "clickstream-postgresql")
+            instance: Consumer instance number (0-indexed)
+            indicators: Dict with keys:
+                - fill_ratio: float (0.0–1.0)
+                - poll_proximity: float (0.0–1.0+)
+                - idle_ms: float
+                - rebalance_count: int (last 5 minutes)
+                - bottleneck_stage: str | None (e.g., "valkey (↑ 48%)")
+        """
+        timestamp = int(time.time())
+        key = f"{BACKPRESSURE_KEY_PREFIX}{consumer_group}:{instance}"
+
+        sample_data = {
+            "ts": timestamp,
+            "instance": instance,
+            **indicators,
+        }
+        sample = json.dumps(sample_data)
+
+        # Use a sorted set so we can retrieve the latest by score
+        self.client.zadd(key, {sample: timestamp})
+        self.client.expire(key, BACKPRESSURE_TTL_SECONDS)
+
+        # Clean up old samples (keep only last 5 minutes)
+        cutoff = timestamp - BACKPRESSURE_TTL_SECONDS
+        self.client.zremrangebyscore(key, "-inf", cutoff)
+
+    def get_backpressure_report(
+        self,
+        consumer_group: str,
+    ) -> dict | None:
+        """
+        Get the latest backpressure indicators across all consumer instances.
+
+        Discovers all instance keys for the consumer group, retrieves the
+        most recent sample from each, and aggregates them into a single
+        report (using worst-case values for saturation indicators).
+
+        Args:
+            consumer_group: Kafka consumer group ID
+
+        Returns:
+            Dict with aggregated indicators, or None if no data:
+            - fill_ratio: float (max across instances)
+            - poll_proximity: float (max across instances)
+            - idle_ms: float (min across instances — least headroom)
+            - rebalance_count: int (sum across instances)
+            - bottleneck_stage: str | None (from instance with highest proximity)
+            - instance_count: int
+            - ts: int (most recent timestamp)
+        """
+        # Discover all instance keys for this consumer group
+        pattern = f"{BACKPRESSURE_KEY_PREFIX}{consumer_group}:*"
+        keys = []
+        cursor = 0
+        while True:
+            cursor, batch = self.client.scan(cursor, match=pattern, count=100)
+            keys.extend(batch)
+            if cursor == 0:
+                break
+
+        if not keys:
+            return None
+
+        # Get the most recent sample from each instance
+        latest_samples = []
+        for key in keys:
+            # Get the last entry (highest score)
+            entries = self.client.zrange(key, -1, -1, withscores=True)
+            if entries:
+                sample_json, _score = entries[0]
+                try:
+                    sample = json.loads(sample_json)
+                    latest_samples.append(sample)
+                except json.JSONDecodeError:
+                    continue
+
+        if not latest_samples:
+            return None
+
+        # Aggregate across instances (worst-case for saturation indicators)
+        max_fill = max(s.get("fill_ratio", 0.0) for s in latest_samples)
+        max_proximity = max(s.get("poll_proximity", 0.0) for s in latest_samples)
+        min_idle = min(s.get("idle_ms", 0.0) for s in latest_samples)
+        total_rebalances = sum(s.get("rebalance_count", 0) for s in latest_samples)
+        latest_ts = max(s.get("ts", 0) for s in latest_samples)
+
+        # Bottleneck stage from the instance with highest proximity
+        worst_instance = max(latest_samples, key=lambda s: s.get("poll_proximity", 0.0))
+        bottleneck = worst_instance.get("bottleneck_stage")
+
+        return {
+            "fill_ratio": max_fill,
+            "poll_proximity": max_proximity,
+            "idle_ms": min_idle,
+            "rebalance_count": total_rebalances,
+            "bottleneck_stage": bottleneck,
+            "instance_count": len(latest_samples),
+            "ts": latest_ts,
+        }
+
 
 # ==============================================================================
 # Module-level convenience functions (for backward compatibility)
@@ -402,3 +522,13 @@ def get_lag_history(consumer_group: str, window_seconds: int = 300) -> list[dict
 def get_lag_trend(consumer_group: str, window_seconds: int = 120) -> str:
     """Determine whether consumer lag is growing, stable, or shrinking."""
     return _get_metrics().get_lag_trend(consumer_group, window_seconds)
+
+
+def record_backpressure_sample(consumer_group: str, instance: int, indicators: dict) -> None:
+    """Record a backpressure indicators sample."""
+    _get_metrics().record_backpressure_sample(consumer_group, instance, indicators)
+
+
+def get_backpressure_report(consumer_group: str) -> dict | None:
+    """Get the latest backpressure indicators across all consumer instances."""
+    return _get_metrics().get_backpressure_report(consumer_group)

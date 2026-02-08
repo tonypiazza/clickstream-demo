@@ -16,7 +16,10 @@ so no real Valkey/Redis server is needed.
 import json
 import time
 
-from clickstream.infrastructure.metrics import LAG_SAMPLES_KEY_PREFIX
+from clickstream.infrastructure.metrics import (
+    BACKPRESSURE_KEY_PREFIX,
+    LAG_SAMPLES_KEY_PREFIX,
+)
 
 # ==============================================================================
 # record_lag_sample
@@ -264,3 +267,246 @@ class TestGetLagTrend:
             fake_redis.zadd(key, {sample: ts})
 
         assert metrics.get_lag_trend(group, window_seconds=120) == "stable"
+
+
+# ==============================================================================
+# record_backpressure_sample — Phase 4f
+# ==============================================================================
+
+
+class TestRecordBackpressureSample:
+    """Tests for PipelineMetrics.record_backpressure_sample()."""
+
+    def test_stores_data_in_sorted_set(self, metrics, fake_redis):
+        """Recording a sample stores it as a JSON entry in a Valkey sorted set."""
+        indicators = {
+            "fill_ratio": 0.95,
+            "poll_proximity": 0.32,
+            "idle_ms": 2.0,
+            "rebalance_count": 0,
+            "bottleneck_stage": None,
+        }
+        metrics.record_backpressure_sample("test-group", 0, indicators)
+
+        key = f"{BACKPRESSURE_KEY_PREFIX}test-group:0"
+        entries = fake_redis.zrange(key, 0, -1, withscores=True)
+
+        assert len(entries) == 1
+        sample_json, score = entries[0]
+        sample = json.loads(sample_json)
+
+        assert sample["instance"] == 0
+        assert sample["fill_ratio"] == 0.95
+        assert sample["poll_proximity"] == 0.32
+        assert sample["idle_ms"] == 2.0
+        assert sample["rebalance_count"] == 0
+        assert sample["bottleneck_stage"] is None
+        assert "ts" in sample
+        assert score == sample["ts"]
+
+    def test_key_pattern_includes_group_and_instance(self, metrics, fake_redis):
+        """Key format is clickstream:backpressure:{group}:{instance}."""
+        metrics.record_backpressure_sample("my-group", 3, {"fill_ratio": 0.5})
+
+        key = f"{BACKPRESSURE_KEY_PREFIX}my-group:3"
+        assert fake_redis.exists(key)
+
+    def test_ttl_is_set(self, metrics, fake_redis):
+        """The sorted set key should have a TTL (expiry) set."""
+        metrics.record_backpressure_sample("test-group", 0, {"fill_ratio": 0.5})
+
+        key = f"{BACKPRESSURE_KEY_PREFIX}test-group:0"
+        ttl = fake_redis.ttl(key)
+        assert ttl > 0
+        assert ttl <= 300  # BACKPRESSURE_TTL_SECONDS
+
+    def test_multiple_samples_accumulate(self, metrics, fake_redis):
+        """Multiple record calls add separate entries to the sorted set."""
+        metrics.record_backpressure_sample("test-group", 0, {"fill_ratio": 0.5})
+        time.sleep(0.01)
+        metrics.record_backpressure_sample("test-group", 0, {"fill_ratio": 0.8})
+
+        key = f"{BACKPRESSURE_KEY_PREFIX}test-group:0"
+        entries = fake_redis.zrange(key, 0, -1)
+        assert len(entries) >= 1
+
+    def test_indicator_values_preserved(self, metrics, fake_redis):
+        """All indicator values are preserved exactly in the stored sample."""
+        indicators = {
+            "fill_ratio": 0.98,
+            "poll_proximity": 0.75,
+            "idle_ms": 1.5,
+            "rebalance_count": 3,
+            "bottleneck_stage": "valkey (↑ 48%)",
+        }
+        metrics.record_backpressure_sample("test-group", 0, indicators)
+
+        key = f"{BACKPRESSURE_KEY_PREFIX}test-group:0"
+        entries = fake_redis.zrange(key, 0, -1)
+        sample = json.loads(entries[0])
+
+        assert sample["fill_ratio"] == 0.98
+        assert sample["poll_proximity"] == 0.75
+        assert sample["idle_ms"] == 1.5
+        assert sample["rebalance_count"] == 3
+        assert sample["bottleneck_stage"] == "valkey (↑ 48%)"
+
+
+# ==============================================================================
+# get_backpressure_report — Phase 4f
+# ==============================================================================
+
+
+class TestGetBackpressureReport:
+    """Tests for PipelineMetrics.get_backpressure_report()."""
+
+    def test_no_data_returns_none(self, metrics):
+        """No data recorded → returns None."""
+        result = metrics.get_backpressure_report("nonexistent-group")
+        assert result is None
+
+    def test_single_instance_returns_indicators(self, metrics):
+        """Single instance with one sample → returns its indicators."""
+        indicators = {
+            "fill_ratio": 0.95,
+            "poll_proximity": 0.32,
+            "idle_ms": 2.0,
+            "rebalance_count": 0,
+            "bottleneck_stage": None,
+        }
+        metrics.record_backpressure_sample("test-group", 0, indicators)
+
+        report = metrics.get_backpressure_report("test-group")
+        assert report is not None
+        assert report["fill_ratio"] == 0.95
+        assert report["poll_proximity"] == 0.32
+        assert report["idle_ms"] == 2.0
+        assert report["rebalance_count"] == 0
+        assert report["bottleneck_stage"] is None
+        assert report["instance_count"] == 1
+        assert "ts" in report
+
+    def test_multi_instance_aggregates_worst_case(self, metrics):
+        """Two instances → report uses worst-case values."""
+        # Instance 0: moderate backpressure
+        metrics.record_backpressure_sample(
+            "test-group",
+            0,
+            {
+                "fill_ratio": 0.80,
+                "poll_proximity": 0.30,
+                "idle_ms": 50.0,
+                "rebalance_count": 1,
+                "bottleneck_stage": None,
+            },
+        )
+        # Instance 1: higher backpressure
+        metrics.record_backpressure_sample(
+            "test-group",
+            1,
+            {
+                "fill_ratio": 0.98,
+                "poll_proximity": 0.75,
+                "idle_ms": 2.0,
+                "rebalance_count": 2,
+                "bottleneck_stage": "valkey (↑ 48%)",
+            },
+        )
+
+        report = metrics.get_backpressure_report("test-group")
+        assert report is not None
+        # fill_ratio: max(0.80, 0.98) = 0.98
+        assert report["fill_ratio"] == 0.98
+        # poll_proximity: max(0.30, 0.75) = 0.75
+        assert report["poll_proximity"] == 0.75
+        # idle_ms: min(50.0, 2.0) = 2.0 (least headroom)
+        assert report["idle_ms"] == 2.0
+        # rebalance_count: sum(1, 2) = 3
+        assert report["rebalance_count"] == 3
+        # bottleneck_stage from highest proximity instance
+        assert report["bottleneck_stage"] == "valkey (↑ 48%)"
+        assert report["instance_count"] == 2
+
+    def test_returns_latest_sample_per_instance(self, metrics, fake_redis):
+        """When multiple samples exist per instance, uses the most recent."""
+        # Record an old sample
+        metrics.record_backpressure_sample(
+            "test-group",
+            0,
+            {
+                "fill_ratio": 0.50,
+                "poll_proximity": 0.10,
+                "idle_ms": 100.0,
+                "rebalance_count": 0,
+                "bottleneck_stage": None,
+            },
+        )
+
+        # Advance time and record a newer sample
+        time.sleep(0.01)
+        metrics.record_backpressure_sample(
+            "test-group",
+            0,
+            {
+                "fill_ratio": 0.99,
+                "poll_proximity": 0.85,
+                "idle_ms": 1.0,
+                "rebalance_count": 4,
+                "bottleneck_stage": "pg_sessions (↑ 30%)",
+            },
+        )
+
+        report = metrics.get_backpressure_report("test-group")
+        assert report is not None
+        # Should reflect the newer sample
+        assert report["fill_ratio"] == 0.99
+        assert report["poll_proximity"] == 0.85
+
+    def test_different_groups_isolated(self, metrics):
+        """Backpressure data for different groups doesn't interfere."""
+        metrics.record_backpressure_sample(
+            "group-a",
+            0,
+            {
+                "fill_ratio": 0.99,
+                "poll_proximity": 0.90,
+                "idle_ms": 1.0,
+                "rebalance_count": 5,
+            },
+        )
+        metrics.record_backpressure_sample(
+            "group-b",
+            0,
+            {
+                "fill_ratio": 0.20,
+                "poll_proximity": 0.05,
+                "idle_ms": 200.0,
+                "rebalance_count": 0,
+            },
+        )
+
+        report_a = metrics.get_backpressure_report("group-a")
+        report_b = metrics.get_backpressure_report("group-b")
+
+        assert report_a["fill_ratio"] == 0.99
+        assert report_b["fill_ratio"] == 0.20
+
+    def test_missing_indicator_keys_use_defaults(self, metrics):
+        """Missing indicator keys in stored sample use safe defaults."""
+        # Record a minimal sample with only fill_ratio
+        metrics.record_backpressure_sample(
+            "test-group",
+            0,
+            {
+                "fill_ratio": 0.75,
+            },
+        )
+
+        report = metrics.get_backpressure_report("test-group")
+        assert report is not None
+        assert report["fill_ratio"] == 0.75
+        # Missing keys should default to safe values
+        assert report["poll_proximity"] == 0.0
+        assert report["idle_ms"] == 0.0
+        assert report["rebalance_count"] == 0
+        assert report["bottleneck_stage"] is None

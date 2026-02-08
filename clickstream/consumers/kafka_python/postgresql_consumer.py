@@ -175,6 +175,15 @@ def run() -> None:
             except Exception as e:
                 logger.debug("Failed to record lag sample: %s", e)
 
+        # Persist backpressure indicators to Valkey for CLI reporting
+        try:
+            from clickstream.infrastructure.metrics import record_backpressure_sample
+
+            indicators = batch_metrics.get_backpressure_indicators()
+            record_backpressure_sample(group_id, instance, indicators)
+        except Exception as e:
+            logger.debug("Failed to record backpressure sample: %s", e)
+
     # Initialize batch metrics with lag callback
     batch_metrics = BatchMetrics(
         event_repo,
