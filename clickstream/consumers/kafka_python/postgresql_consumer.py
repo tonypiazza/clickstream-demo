@@ -116,7 +116,6 @@ def run() -> None:
     # Build Kafka consumer config
     kafka_config = build_kafka_config(settings.kafka)
     consumer = KafkaConsumer(
-        topic,
         **kafka_config,
         group_id=group_id,
         auto_offset_reset=consumer_settings.auto_offset_reset,
@@ -186,6 +185,23 @@ def run() -> None:
         max_poll_interval_ms=consumer_settings.max_poll_interval_ms,
     )
 
+    # Rebalance listener for tracking partition assignment events
+    from kafka.consumer.subscription_state import ConsumerRebalanceListener
+
+    class RebalanceListener(ConsumerRebalanceListener):
+        def on_partitions_revoked(self, revoked):
+            logger.info("Revoked %d partitions", len(revoked))
+
+        def on_partitions_assigned(self, assigned):
+            logger.info(
+                "Assigned %d partitions: %s",
+                len(assigned),
+                [f"{tp.topic}-{tp.partition}" for tp in assigned],
+            )
+            batch_metrics.record_rebalance()
+
+    consumer.subscribe([topic], listener=RebalanceListener())
+
     # Track consecutive empty polls for benchmark mode EOF detection
     empty_poll_count = 0
     max_empty_polls = 3  # Exit after 3 consecutive empty polls when at EOF
@@ -199,9 +215,11 @@ def run() -> None:
         )
 
     try:
+        t_commit_end = 0.0  # Track commit end time for idle gap calculation
         while not _shutdown_requested:
             # Poll batch of messages
             t_poll_start = time.monotonic()
+            idle_ms = (t_poll_start - t_commit_end) * 1000 if t_commit_end else 0.0
             raw_messages = consumer.poll(
                 timeout_ms=consumer_settings.poll_timeout_ms,
                 max_records=consumer_settings.batch_size,
@@ -243,7 +261,8 @@ def run() -> None:
                 # Commit offsets (timed)
                 t_commit = time.monotonic()
                 consumer.commit()
-                commit_ms = (time.monotonic() - t_commit) * 1000
+                t_commit_end = time.monotonic()
+                commit_ms = (t_commit_end - t_commit) * 1000
                 logger.info("Commit: %.0fms", commit_ms)
 
                 # Record loop timing for periodic summaries
@@ -252,6 +271,7 @@ def run() -> None:
                     commit_ms=commit_ms,
                     batch_size=msg_count,
                     max_batch_size=consumer_settings.batch_size,
+                    idle_ms=idle_ms,
                 )
 
             except Exception as e:

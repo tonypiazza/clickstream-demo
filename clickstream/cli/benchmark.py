@@ -17,7 +17,7 @@ import time
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Optional
 
 import typer
 from rich.console import Console
@@ -357,7 +357,7 @@ def _print_summary(results: list[tuple[int, int]], is_incremental: bool) -> None
 
 def benchmark_run(
     limit: Annotated[
-        int | None,
+        Optional[int],
         typer.Option("--limit", "-l", help="Number of events to produce (default: all)"),
     ] = None,
     output: Annotated[Path, typer.Option("--output", "-o", help="Output CSV file")] = Path(
@@ -385,7 +385,7 @@ def benchmark_run(
         int, typer.Option("--offset", help="Number of rows to skip in CSV (0 = start at row 1)")
     ] = 0,
     impl: Annotated[
-        str | None,
+        Optional[str],
         typer.Option(
             "--consumer-impl",
             help="Override consumer implementation (confluent, kafka_python, quix, mage, bytewax)",
@@ -846,7 +846,7 @@ def _format_duration(seconds: int) -> str:
 
 def benchmark_show(
     file: Annotated[
-        Path | None, typer.Option("--file", "-f", help="Benchmark results CSV file")
+        Optional[Path], typer.Option("--file", "-f", help="Benchmark results CSV file")
     ] = None,
     ramp: Annotated[bool, typer.Option("--ramp", help="Show ramp test results")] = False,
     run: Annotated[bool, typer.Option("--run", help="Show run test results (default)")] = False,
@@ -854,15 +854,15 @@ def benchmark_show(
         bool, typer.Option("--all", help="Show all runs instead of latest (ramp only)")
     ] = False,
     environment: Annotated[
-        str | None,
+        Optional[str],
         typer.Option("--environment", "-e", help="Filter by environment (local/aiven)"),
     ] = None,
     since: Annotated[
-        str | None,
+        Optional[str],
         typer.Option("--since", help="Show results since date (ISO or relative: 7d, 2w, 1m)"),
     ] = None,
     until: Annotated[
-        str | None, typer.Option("--until", help="Show results until date (ISO format)")
+        Optional[str], typer.Option("--until", help="Show results until date (ISO format)")
     ] = None,
     summary: Annotated[
         bool, typer.Option("--summary", "-s", help="Show summary statistics")
@@ -1383,7 +1383,7 @@ def benchmark_ramp(
         int, typer.Option("--step-duration", help="Seconds to hold each rate level")
     ] = 60,
     impl: Annotated[
-        str | None,
+        Optional[str],
         typer.Option(
             "--consumer-impl",
             help="Override consumer implementation (confluent, kafka_python, quix, mage, bytewax)",

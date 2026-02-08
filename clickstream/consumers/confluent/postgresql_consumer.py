@@ -276,6 +276,7 @@ def run() -> None:
             len(partitions),
             [f"{p.topic}-{p.partition}" for p in partitions],
         )
+        batch_metrics.record_rebalance()
         # In benchmark mode, check if any reassigned partitions are already at EOF
         if benchmark_mode and partitions:
             _check_partitions_at_eof(consumer, partitions)
@@ -297,10 +298,12 @@ def run() -> None:
         logger.info("Benchmark mode: will exit when all assigned partitions reach EOF")
 
     try:
+        t_commit_end = 0.0  # Track commit end time for idle gap calculation
         while not _shutdown_requested:
             # Use consume() batch API - more efficient than poll()
             # Returns list of messages directly (not dict of partition -> messages)
             t_poll_start = time.monotonic()
+            idle_ms = (t_poll_start - t_commit_end) * 1000 if t_commit_end else 0.0
             messages = consumer.consume(
                 num_messages=10000,  # Larger batch for better throughput
                 timeout=consumer_settings.poll_timeout_ms / 1000.0,  # Convert to seconds
@@ -370,7 +373,8 @@ def run() -> None:
                 # Commit offsets (timed)
                 t_commit = time.monotonic()
                 consumer.commit()
-                commit_ms = (time.monotonic() - t_commit) * 1000
+                t_commit_end = time.monotonic()
+                commit_ms = (t_commit_end - t_commit) * 1000
                 logger.info("Commit: %.0fms", commit_ms)
 
                 # Record loop timing for periodic summaries
@@ -379,6 +383,7 @@ def run() -> None:
                     commit_ms=commit_ms,
                     batch_size=len(messages),
                     max_batch_size=10000,
+                    idle_ms=idle_ms,
                 )
 
             except Exception as e:

@@ -118,6 +118,13 @@ class BatchMetrics:
         self._period_max_proximity = 0.0  # max proximity seen during period
         self._cum_max_proximity = 0.0  # max proximity seen lifetime
 
+        # Idle time (commit-to-poll gap) — populated by record_loop_timing()
+        self._cum_idle_ms = 0.0
+        self._period_idle_ms = 0.0
+
+        # Rebalance tracking — populated by record_rebalance()
+        self._rebalance_events: list[float] = []
+
     def process_batch(self, events: list[dict]) -> list[dict]:
         """
         Execute the 3-step pipeline with timing instrumentation.
@@ -219,6 +226,7 @@ class BatchMetrics:
         commit_ms: float,
         batch_size: int,
         max_batch_size: int,
+        idle_ms: float = 0.0,
     ) -> None:
         """
         Record poll and commit timings from the consumer loop.
@@ -236,6 +244,7 @@ class BatchMetrics:
             commit_ms: Time spent in commit() in milliseconds
             batch_size: Number of messages returned by this poll
             max_batch_size: Maximum messages requested (num_messages / max_records)
+            idle_ms: Gap between previous commit and this poll (headroom)
         """
         fill_ratio = batch_size / max_batch_size if max_batch_size > 0 else 0.0
 
@@ -243,11 +252,13 @@ class BatchMetrics:
         self._cum_commit_ms += commit_ms
         self._cum_loop_count += 1
         self._cum_fill_sum += fill_ratio
+        self._cum_idle_ms += idle_ms
 
         self._period_poll_ms += poll_ms
         self._period_commit_ms += commit_ms
         self._period_loop_count += 1
         self._period_fill_ratios.append(fill_ratio)
+        self._period_idle_ms += idle_ms
 
         # Compute max poll interval proximity
         if self._max_poll_interval_ms > 0:
@@ -272,6 +283,16 @@ class BatchMetrics:
                     loop_ms,
                     self._max_poll_interval_ms,
                 )
+
+    def record_rebalance(self) -> None:
+        """
+        Record a consumer rebalance event.
+
+        Should be called from the consumer's on_assign callback (not
+        on_revoke, to avoid double-counting). Timestamps are used to
+        detect frequent rebalances in periodic summaries.
+        """
+        self._rebalance_events.append(time.monotonic())
 
     def _log_summary(self, now: float) -> None:
         """Log periodic throughput summary and reset period counters."""
@@ -306,20 +327,37 @@ class BatchMetrics:
         if self._period_loop_count > 0:
             avg_poll_ms = self._period_poll_ms / self._period_loop_count
             avg_commit_ms = self._period_commit_ms / self._period_loop_count
+            avg_idle_ms = self._period_idle_ms / self._period_loop_count
             avg_fill = (
                 sum(self._period_fill_ratios) / len(self._period_fill_ratios)
                 if self._period_fill_ratios
                 else 0.0
             )
+            # Headroom: idle as percentage of total loop cycle
+            avg_loop_ms = avg_poll_ms + avg_commit_ms + avg_idle_ms
+            headroom = (avg_idle_ms / avg_loop_ms * 100) if avg_loop_ms > 0 else 0
             self._log.info(
-                "Loop (%.1fs): avg_poll=%.*fms avg_commit=%.*fms | fill=%d%% | poll_proximity=%.2f",
+                "Loop (%.1fs): avg_poll=%.*fms avg_commit=%.*fms "
+                "avg_idle=%.*fms (headroom: %d%%) | "
+                "fill=%d%% | poll_proximity=%.2f",
                 elapsed,
                 _precision(avg_poll_ms),
                 avg_poll_ms,
                 _precision(avg_commit_ms),
                 avg_commit_ms,
+                _precision(avg_idle_ms),
+                avg_idle_ms,
+                int(headroom),
                 int(avg_fill * 100),
                 self._period_max_proximity,
+            )
+
+        # Check for frequent rebalances (last 5 minutes)
+        recent_rebalances = sum(1 for t in self._rebalance_events if now - t <= 300)
+        if recent_rebalances > 2:
+            self._log.warning(
+                "%d rebalances in last 5 minutes — consumer group unstable",
+                recent_rebalances,
             )
 
         # Log cumulative totals
@@ -353,6 +391,7 @@ class BatchMetrics:
         self._period_loop_count = 0
         self._period_fill_ratios = []
         self._period_max_proximity = 0.0
+        self._period_idle_ms = 0.0
         self._last_summary_time = now
 
     def log_final_summary(self) -> None:
@@ -396,16 +435,24 @@ class BatchMetrics:
         if self._cum_loop_count > 0:
             avg_poll_ms = self._cum_poll_ms / self._cum_loop_count
             avg_commit_ms = self._cum_commit_ms / self._cum_loop_count
+            avg_idle_ms = self._cum_idle_ms / self._cum_loop_count
             avg_fill = self._cum_fill_sum / self._cum_loop_count
+            avg_loop_ms = avg_poll_ms + avg_commit_ms + avg_idle_ms
+            headroom = (avg_idle_ms / avg_loop_ms * 100) if avg_loop_ms > 0 else 0
             self._log.info(
-                "Final loop: avg_poll=%.*fms avg_commit=%.*fms | "
-                "fill=%d%% | max_poll_proximity=%.2f",
+                "Final loop: avg_poll=%.*fms avg_commit=%.*fms "
+                "avg_idle=%.*fms (headroom: %d%%) | "
+                "fill=%d%% | max_poll_proximity=%.2f | rebalances=%d",
                 _precision(avg_poll_ms),
                 avg_poll_ms,
                 _precision(avg_commit_ms),
                 avg_commit_ms,
+                _precision(avg_idle_ms),
+                avg_idle_ms,
+                int(headroom),
                 int(avg_fill * 100),
                 self._cum_max_proximity,
+                len(self._rebalance_events),
             )
 
 

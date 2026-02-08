@@ -500,3 +500,407 @@ class TestProximityInSummary:
 
         # Cumulative should still be the higher value from period 1
         assert bm._cum_max_proximity == pytest.approx(0.65)
+
+
+# ==============================================================================
+# Idle time (commit-to-poll gap) — Phase 4c
+# ==============================================================================
+
+
+class TestIdleTimeAccumulation:
+    """Tests for idle_ms accumulation in record_loop_timing."""
+
+    def test_idle_ms_accumulates_period_and_cumulative(self):
+        """idle_ms is accumulated into both period and cumulative counters."""
+        bm = _make_batch_metrics()
+        bm.record_loop_timing(
+            poll_ms=5.0, commit_ms=3.0, batch_size=800, max_batch_size=1000, idle_ms=10.0
+        )
+        assert bm._period_idle_ms == 10.0
+        assert bm._cum_idle_ms == 10.0
+
+    def test_multiple_idle_ms_accumulate(self):
+        """Multiple calls accumulate idle_ms correctly."""
+        bm = _make_batch_metrics()
+        bm.record_loop_timing(
+            poll_ms=5.0, commit_ms=3.0, batch_size=800, max_batch_size=1000, idle_ms=10.0
+        )
+        bm.record_loop_timing(
+            poll_ms=5.0, commit_ms=3.0, batch_size=800, max_batch_size=1000, idle_ms=25.0
+        )
+        assert bm._period_idle_ms == 35.0
+        assert bm._cum_idle_ms == 35.0
+
+    def test_idle_ms_defaults_to_zero(self):
+        """When idle_ms is not passed, it defaults to 0."""
+        bm = _make_batch_metrics()
+        bm.record_loop_timing(poll_ms=5.0, commit_ms=3.0, batch_size=800, max_batch_size=1000)
+        assert bm._period_idle_ms == 0.0
+        assert bm._cum_idle_ms == 0.0
+
+    def test_idle_ms_starts_at_zero(self):
+        """Idle time fields start at zero before any recording."""
+        bm = _make_batch_metrics()
+        assert bm._period_idle_ms == 0.0
+        assert bm._cum_idle_ms == 0.0
+
+
+class TestIdleTimePeriodReset:
+    """Tests for idle_ms period reset after summary."""
+
+    def test_period_idle_resets_after_summary(self):
+        """Period idle_ms resets to 0 after summary, cumulative persists."""
+        bm = _make_batch_metrics(summary_interval=0.01)
+
+        bm.process_batch([{"event": "test"}])
+        bm.record_loop_timing(
+            poll_ms=5.0, commit_ms=3.0, batch_size=800, max_batch_size=1000, idle_ms=15.0
+        )
+
+        time.sleep(0.02)
+        bm.process_batch([{"event": "test2"}])  # triggers summary + reset
+
+        assert bm._period_idle_ms == 0.0
+        assert bm._cum_idle_ms == 15.0
+
+    def test_cumulative_idle_persists_across_periods(self):
+        """Cumulative idle_ms accumulates across multiple periods."""
+        bm = _make_batch_metrics(summary_interval=0.01)
+
+        # Period 1
+        bm.process_batch([{"event": "test"}])
+        bm.record_loop_timing(
+            poll_ms=5.0, commit_ms=3.0, batch_size=800, max_batch_size=1000, idle_ms=10.0
+        )
+
+        time.sleep(0.02)
+        bm.process_batch([{"event": "test2"}])  # triggers summary + reset
+
+        # Period 2
+        bm.record_loop_timing(
+            poll_ms=5.0, commit_ms=3.0, batch_size=800, max_batch_size=1000, idle_ms=20.0
+        )
+
+        assert bm._period_idle_ms == 20.0
+        assert bm._cum_idle_ms == 30.0
+
+
+class TestHeadroomCalculation:
+    """Tests for headroom percentage calculation in summaries."""
+
+    def test_headroom_in_periodic_summary(self, caplog):
+        """Periodic summary includes headroom percentage."""
+        bm = _make_batch_metrics(summary_interval=0.01)
+
+        bm.process_batch([{"event": "test"}])
+        # idle=20ms, poll=40ms, commit=40ms → avg_loop = 40+40+20 = 100ms
+        # headroom = 20/100 * 100 = 20%
+        bm.record_loop_timing(
+            poll_ms=40.0, commit_ms=40.0, batch_size=800, max_batch_size=1000, idle_ms=20.0
+        )
+
+        time.sleep(0.02)
+
+        with caplog.at_level(logging.INFO):
+            bm.process_batch([{"event": "test2"}])
+
+        loop_msgs = [r.message for r in caplog.records if "headroom:" in r.message]
+        assert len(loop_msgs) >= 1
+        assert "headroom: 20%" in loop_msgs[0]
+
+    def test_headroom_zero_when_no_idle(self, caplog):
+        """Headroom is 0% when idle_ms is 0."""
+        bm = _make_batch_metrics(summary_interval=0.01)
+
+        bm.process_batch([{"event": "test"}])
+        bm.record_loop_timing(
+            poll_ms=50.0, commit_ms=50.0, batch_size=800, max_batch_size=1000, idle_ms=0.0
+        )
+
+        time.sleep(0.02)
+
+        with caplog.at_level(logging.INFO):
+            bm.process_batch([{"event": "test2"}])
+
+        loop_msgs = [r.message for r in caplog.records if "headroom:" in r.message]
+        assert len(loop_msgs) >= 1
+        assert "headroom: 0%" in loop_msgs[0]
+
+    def test_headroom_in_final_summary(self, caplog):
+        """Final summary includes headroom percentage."""
+        bm = _make_batch_metrics()
+
+        bm.process_batch([{"event": "test"}])
+        # idle=50ms, poll=25ms, commit=25ms → avg_loop = 25+25+50 = 100ms
+        # headroom = 50/100 * 100 = 50%
+        bm.record_loop_timing(
+            poll_ms=25.0, commit_ms=25.0, batch_size=800, max_batch_size=1000, idle_ms=50.0
+        )
+
+        with caplog.at_level(logging.INFO):
+            bm.log_final_summary()
+
+        loop_msgs = [r.message for r in caplog.records if "Final loop:" in r.message]
+        assert len(loop_msgs) == 1
+        assert "headroom: 50%" in loop_msgs[0]
+
+    def test_avg_idle_in_periodic_summary(self, caplog):
+        """Periodic summary shows avg_idle value."""
+        bm = _make_batch_metrics(summary_interval=0.01)
+
+        bm.process_batch([{"event": "test"}])
+        bm.record_loop_timing(
+            poll_ms=10.0, commit_ms=5.0, batch_size=800, max_batch_size=1000, idle_ms=8.0
+        )
+        bm.record_loop_timing(
+            poll_ms=10.0, commit_ms=5.0, batch_size=800, max_batch_size=1000, idle_ms=12.0
+        )
+
+        time.sleep(0.02)
+
+        with caplog.at_level(logging.INFO):
+            bm.process_batch([{"event": "test2"}])
+
+        loop_msgs = [r.message for r in caplog.records if "avg_idle=" in r.message]
+        assert len(loop_msgs) >= 1
+
+    def test_avg_idle_in_final_summary(self, caplog):
+        """Final summary shows avg_idle value."""
+        bm = _make_batch_metrics()
+
+        bm.process_batch([{"event": "test"}])
+        bm.record_loop_timing(
+            poll_ms=10.0, commit_ms=5.0, batch_size=800, max_batch_size=1000, idle_ms=6.0
+        )
+        bm.record_loop_timing(
+            poll_ms=10.0, commit_ms=5.0, batch_size=800, max_batch_size=1000, idle_ms=14.0
+        )
+
+        with caplog.at_level(logging.INFO):
+            bm.log_final_summary()
+
+        loop_msgs = [r.message for r in caplog.records if "Final loop:" in r.message]
+        assert len(loop_msgs) == 1
+        assert "avg_idle=" in loop_msgs[0]
+
+
+# ==============================================================================
+# Rebalance tracking — Phase 4d
+# ==============================================================================
+
+
+class TestRecordRebalance:
+    """Tests for the record_rebalance method."""
+
+    def test_record_rebalance_appends_timestamp(self):
+        """record_rebalance() appends a monotonic timestamp."""
+        bm = _make_batch_metrics()
+        assert len(bm._rebalance_events) == 0
+
+        bm.record_rebalance()
+        assert len(bm._rebalance_events) == 1
+        assert isinstance(bm._rebalance_events[0], float)
+
+    def test_multiple_rebalances_accumulate(self):
+        """Multiple record_rebalance() calls accumulate timestamps."""
+        bm = _make_batch_metrics()
+        bm.record_rebalance()
+        bm.record_rebalance()
+        bm.record_rebalance()
+        assert len(bm._rebalance_events) == 3
+
+    def test_rebalance_timestamps_are_monotonically_increasing(self):
+        """Recorded timestamps are monotonically increasing."""
+        bm = _make_batch_metrics()
+        bm.record_rebalance()
+        bm.record_rebalance()
+        assert bm._rebalance_events[1] >= bm._rebalance_events[0]
+
+    def test_rebalance_events_starts_empty(self):
+        """_rebalance_events list starts empty before any recording."""
+        bm = _make_batch_metrics()
+        assert bm._rebalance_events == []
+
+
+class TestRebalancePeriodicSummary:
+    """Tests for rebalance count in periodic summaries."""
+
+    def test_no_warning_when_zero_rebalances(self, caplog):
+        """No rebalance warning is logged when there are no rebalances."""
+        bm = _make_batch_metrics(summary_interval=0.01)
+
+        bm.process_batch([{"event": "test"}])
+        bm.record_loop_timing(poll_ms=5.0, commit_ms=3.0, batch_size=800, max_batch_size=1000)
+
+        time.sleep(0.02)
+
+        with caplog.at_level(logging.WARNING):
+            bm.process_batch([{"event": "test2"}])
+
+        warning_msgs = [
+            r.message for r in caplog.records if "rebalances in last 5 minutes" in r.message
+        ]
+        assert len(warning_msgs) == 0
+
+    def test_no_warning_when_two_rebalances(self, caplog):
+        """No warning when exactly 2 rebalances in 5 minutes (threshold is >2)."""
+        bm = _make_batch_metrics(summary_interval=0.01)
+
+        bm.record_rebalance()
+        bm.record_rebalance()
+
+        bm.process_batch([{"event": "test"}])
+        bm.record_loop_timing(poll_ms=5.0, commit_ms=3.0, batch_size=800, max_batch_size=1000)
+
+        time.sleep(0.02)
+
+        with caplog.at_level(logging.WARNING):
+            bm.process_batch([{"event": "test2"}])
+
+        warning_msgs = [
+            r.message for r in caplog.records if "rebalances in last 5 minutes" in r.message
+        ]
+        assert len(warning_msgs) == 0
+
+    def test_warning_when_three_rebalances(self, caplog):
+        """WARNING logged when >2 rebalances occur in 5 minutes."""
+        bm = _make_batch_metrics(summary_interval=0.01)
+
+        bm.record_rebalance()
+        bm.record_rebalance()
+        bm.record_rebalance()
+
+        bm.process_batch([{"event": "test"}])
+        bm.record_loop_timing(poll_ms=5.0, commit_ms=3.0, batch_size=800, max_batch_size=1000)
+
+        time.sleep(0.02)
+
+        with caplog.at_level(logging.WARNING):
+            bm.process_batch([{"event": "test2"}])
+
+        warning_msgs = [
+            r.message for r in caplog.records if "rebalances in last 5 minutes" in r.message
+        ]
+        assert len(warning_msgs) == 1
+        assert "3 rebalances" in warning_msgs[0]
+        assert "consumer group unstable" in warning_msgs[0]
+
+    def test_warning_includes_correct_count(self, caplog):
+        """Warning message includes the exact count of recent rebalances."""
+        bm = _make_batch_metrics(summary_interval=0.01)
+
+        for _ in range(5):
+            bm.record_rebalance()
+
+        bm.process_batch([{"event": "test"}])
+        bm.record_loop_timing(poll_ms=5.0, commit_ms=3.0, batch_size=800, max_batch_size=1000)
+
+        time.sleep(0.02)
+
+        with caplog.at_level(logging.WARNING):
+            bm.process_batch([{"event": "test2"}])
+
+        warning_msgs = [
+            r.message for r in caplog.records if "rebalances in last 5 minutes" in r.message
+        ]
+        assert len(warning_msgs) == 1
+        assert "5 rebalances" in warning_msgs[0]
+
+    def test_old_rebalances_not_counted(self, caplog):
+        """Rebalances older than 5 minutes don't count toward the warning."""
+        bm = _make_batch_metrics(summary_interval=0.01)
+
+        # Simulate 3 old rebalances by directly injecting timestamps
+        now = time.monotonic()
+        bm._rebalance_events = [now - 400, now - 350, now - 310]  # All > 5 min ago
+
+        bm.process_batch([{"event": "test"}])
+        bm.record_loop_timing(poll_ms=5.0, commit_ms=3.0, batch_size=800, max_batch_size=1000)
+
+        time.sleep(0.02)
+
+        with caplog.at_level(logging.WARNING):
+            bm.process_batch([{"event": "test2"}])
+
+        warning_msgs = [
+            r.message for r in caplog.records if "rebalances in last 5 minutes" in r.message
+        ]
+        assert len(warning_msgs) == 0
+
+    def test_mix_of_old_and_recent_rebalances(self, caplog):
+        """Only recent rebalances count; old ones are excluded."""
+        bm = _make_batch_metrics(summary_interval=0.01)
+
+        now = time.monotonic()
+        # 2 old rebalances (don't count) + 3 recent ones (do count)
+        bm._rebalance_events = [now - 400, now - 350, now - 1, now - 0.5, now - 0.1]
+
+        bm.process_batch([{"event": "test"}])
+        bm.record_loop_timing(poll_ms=5.0, commit_ms=3.0, batch_size=800, max_batch_size=1000)
+
+        time.sleep(0.02)
+
+        with caplog.at_level(logging.WARNING):
+            bm.process_batch([{"event": "test2"}])
+
+        warning_msgs = [
+            r.message for r in caplog.records if "rebalances in last 5 minutes" in r.message
+        ]
+        assert len(warning_msgs) == 1
+        assert "3 rebalances" in warning_msgs[0]
+
+
+class TestRebalanceFinalSummary:
+    """Tests for rebalance count in final summary."""
+
+    def test_final_summary_includes_rebalance_count(self, caplog):
+        """Final summary includes total rebalance count."""
+        bm = _make_batch_metrics()
+
+        bm.record_rebalance()
+        bm.record_rebalance()
+
+        bm.process_batch([{"event": "test"}])
+        bm.record_loop_timing(poll_ms=5.0, commit_ms=3.0, batch_size=800, max_batch_size=1000)
+
+        with caplog.at_level(logging.INFO):
+            bm.log_final_summary()
+
+        loop_msgs = [r.message for r in caplog.records if "Final loop:" in r.message]
+        assert len(loop_msgs) == 1
+        assert "rebalances=2" in loop_msgs[0]
+
+    def test_final_summary_zero_rebalances(self, caplog):
+        """Final summary shows rebalances=0 when none occurred."""
+        bm = _make_batch_metrics()
+
+        bm.process_batch([{"event": "test"}])
+        bm.record_loop_timing(poll_ms=5.0, commit_ms=3.0, batch_size=800, max_batch_size=1000)
+
+        with caplog.at_level(logging.INFO):
+            bm.log_final_summary()
+
+        loop_msgs = [r.message for r in caplog.records if "Final loop:" in r.message]
+        assert len(loop_msgs) == 1
+        assert "rebalances=0" in loop_msgs[0]
+
+    def test_final_summary_counts_all_rebalances(self, caplog):
+        """Final summary counts ALL rebalances, including ones older than 5 min."""
+        bm = _make_batch_metrics()
+
+        # Inject old rebalance + record new ones
+        now = time.monotonic()
+        bm._rebalance_events = [now - 400]  # 1 old
+        bm.record_rebalance()  # 1 recent
+        bm.record_rebalance()  # 1 recent
+
+        bm.process_batch([{"event": "test"}])
+        bm.record_loop_timing(poll_ms=5.0, commit_ms=3.0, batch_size=800, max_batch_size=1000)
+
+        with caplog.at_level(logging.INFO):
+            bm.log_final_summary()
+
+        loop_msgs = [r.message for r in caplog.records if "Final loop:" in r.message]
+        assert len(loop_msgs) == 1
+        # Total = 3 (1 old + 2 recent)
+        assert "rebalances=3" in loop_msgs[0]
