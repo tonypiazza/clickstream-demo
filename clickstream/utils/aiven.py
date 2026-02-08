@@ -13,16 +13,16 @@ Includes light retry logic (3 attempts, ~7 seconds) for network resilience.
 API Documentation: https://api.aiven.io/doc/
 """
 
-from typing import Any, Optional
+from typing import Any
 
 import requests
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from clickstream.utils.config import get_settings
 from clickstream.utils.retry import (
     RETRY_ATTEMPTS_LIGHT,
-    RETRY_WAIT_MIN,
     RETRY_WAIT_MAX,
+    RETRY_WAIT_MIN,
     log_retry_attempt_light,
 )
 
@@ -37,7 +37,7 @@ DEFAULT_TIMEOUT = 10  # seconds
 
 def _make_service_request(
     service_name: str, settings: Any, timeout: int
-) -> Optional[dict[str, Any]]:
+) -> dict[str, Any] | None:
     """
     Make a request to the Aiven API for service status.
 
@@ -84,7 +84,7 @@ def _make_service_request(
 )
 def _make_service_request_with_retry(
     service_name: str, settings: Any, timeout: int
-) -> Optional[dict[str, Any]]:
+) -> dict[str, Any] | None:
     """
     Make a request to the Aiven API with retry logic.
 
@@ -95,7 +95,7 @@ def _make_service_request_with_retry(
 
 def get_service_status(
     service_name: str, timeout: int = DEFAULT_TIMEOUT
-) -> Optional[dict[str, Any]]:
+) -> dict[str, Any] | None:
     """
     Get service status from Aiven API.
 
@@ -128,7 +128,7 @@ def get_service_status(
         return None
 
 
-def is_service_running(service_name: str, timeout: int = DEFAULT_TIMEOUT) -> Optional[bool]:
+def is_service_running(service_name: str, timeout: int = DEFAULT_TIMEOUT) -> bool | None:
     """
     Check if an Aiven service is running.
 
@@ -151,7 +151,7 @@ def is_service_running(service_name: str, timeout: int = DEFAULT_TIMEOUT) -> Opt
 # ==============================================================================
 
 
-def get_kafka_status(timeout: int = DEFAULT_TIMEOUT) -> Optional[dict[str, Any]]:
+def get_kafka_status(timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any] | None:
     """
     Get Kafka service status via Aiven API.
 
@@ -165,7 +165,7 @@ def get_kafka_status(timeout: int = DEFAULT_TIMEOUT) -> Optional[dict[str, Any]]
     return get_service_status(service_name, timeout)
 
 
-def get_postgres_status(timeout: int = DEFAULT_TIMEOUT) -> Optional[dict[str, Any]]:
+def get_postgres_status(timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any] | None:
     """
     Get PostgreSQL service status via Aiven API.
 
@@ -179,7 +179,7 @@ def get_postgres_status(timeout: int = DEFAULT_TIMEOUT) -> Optional[dict[str, An
     return get_service_status(service_name, timeout)
 
 
-def get_opensearch_status(timeout: int = DEFAULT_TIMEOUT) -> Optional[dict[str, Any]]:
+def get_opensearch_status(timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any] | None:
     """
     Get OpenSearch service status via Aiven API.
 
@@ -193,7 +193,7 @@ def get_opensearch_status(timeout: int = DEFAULT_TIMEOUT) -> Optional[dict[str, 
     return get_service_status(service_name, timeout)
 
 
-def get_valkey_status(timeout: int = DEFAULT_TIMEOUT) -> Optional[dict[str, Any]]:
+def get_valkey_status(timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any] | None:
     """
     Get Valkey service status via Aiven API.
 
@@ -212,7 +212,7 @@ def get_valkey_status(timeout: int = DEFAULT_TIMEOUT) -> Optional[dict[str, Any]
 # ==============================================================================
 
 
-def check_all_services(timeout: int = DEFAULT_TIMEOUT) -> dict[str, Optional[dict[str, Any]]]:
+def check_all_services(timeout: int = DEFAULT_TIMEOUT) -> dict[str, dict[str, Any] | None]:
     """
     Check status of all configured Aiven services.
 

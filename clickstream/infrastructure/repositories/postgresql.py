@@ -10,8 +10,7 @@ Provides:
 """
 
 import logging
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 import psycopg2
 from psycopg2.extras import execute_batch
@@ -47,7 +46,7 @@ class PostgreSQLEventRepository(EventRepository):
     which ensures idempotent inserts.
     """
 
-    def __init__(self, settings: Optional[Settings] = None):
+    def __init__(self, settings: Settings | None = None):
         """
         Initialize the event repository.
 
@@ -55,7 +54,7 @@ class PostgreSQLEventRepository(EventRepository):
             settings: Application settings. If None, uses get_settings().
         """
         self._settings = settings or get_settings()
-        self._conn: Optional[psycopg2.extensions.connection] = None
+        self._conn: psycopg2.extensions.connection | None = None
         self._schema = self._settings.postgres.schema_name
 
     @property
@@ -94,7 +93,7 @@ class PostgreSQLEventRepository(EventRepository):
         messages = []
         for event in events:
             # Convert timestamp (Unix ms) to datetime
-            event_time = datetime.fromtimestamp(event["timestamp"] / 1000.0, tz=timezone.utc)
+            event_time = datetime.fromtimestamp(event["timestamp"] / 1000.0, tz=UTC)
             messages.append(
                 {
                     "event_time": event_time,
@@ -164,7 +163,7 @@ class PostgreSQLSessionRepository(SessionRepository):
     session data across multiple batches.
     """
 
-    def __init__(self, settings: Optional[Settings] = None):
+    def __init__(self, settings: Settings | None = None):
         """
         Initialize the session repository.
 
@@ -172,7 +171,7 @@ class PostgreSQLSessionRepository(SessionRepository):
             settings: Application settings. If None, uses get_settings().
         """
         self._settings = settings or get_settings()
-        self._conn: Optional[psycopg2.extensions.connection] = None
+        self._conn: psycopg2.extensions.connection | None = None
         self._schema = self._settings.postgres.schema_name
 
     @property
@@ -281,7 +280,7 @@ class PostgreSQLSessionRepository(SessionRepository):
                 self._conn = None
 
 
-def check_postgresql_connection(settings: Optional[Settings] = None) -> bool:
+def check_postgresql_connection(settings: Settings | None = None) -> bool:
     """
     Check if PostgreSQL is reachable.
 

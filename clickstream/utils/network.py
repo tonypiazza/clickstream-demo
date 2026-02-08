@@ -11,7 +11,7 @@ that affect pipeline throughput.
 import socket
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from clickstream.utils.config import Settings
@@ -21,14 +21,14 @@ if TYPE_CHECKING:
 class NetworkMetrics:
     """Network measurement results."""
 
-    kafka_latency_ms: Optional[float] = None
-    pg_latency_ms: Optional[float] = None
-    valkey_latency_ms: Optional[float] = None
-    upload_mbps: Optional[float] = None
-    ping_ms: Optional[float] = None
+    kafka_latency_ms: float | None = None
+    pg_latency_ms: float | None = None
+    valkey_latency_ms: float | None = None
+    upload_mbps: float | None = None
+    ping_ms: float | None = None
 
 
-def measure_tcp_latency(host: str, port: int, timeout: float = 5.0) -> Optional[float]:
+def measure_tcp_latency(host: str, port: int, timeout: float = 5.0) -> float | None:
     """
     Measure TCP connection latency to a host.
 
@@ -66,7 +66,7 @@ def measure_tcp_latency(host: str, port: int, timeout: float = 5.0) -> Optional[
         return None
 
 
-def measure_speedtest() -> tuple[Optional[float], Optional[float]]:
+def measure_speedtest() -> tuple[float | None, float | None]:
     """
     Run speedtest to measure upload speed and ping.
 

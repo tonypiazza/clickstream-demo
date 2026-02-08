@@ -15,8 +15,8 @@ import os
 import signal
 import sys
 import time
+from collections.abc import Generator
 from pathlib import Path
-from typing import Generator, Optional
 
 from clickstream.producers.base import StreamingProducer
 from clickstream.utils.paths import get_project_root
@@ -102,10 +102,10 @@ def _read_events(
 
 
 def run_producer(
-    limit: Optional[int] = None,
+    limit: int | None = None,
     realtime: bool = False,
     speed: float = 1.0,
-    rate: Optional[float] = None,
+    rate: float | None = None,
 ) -> None:
     """
     Run the Quix Streams producer.
@@ -282,10 +282,10 @@ class QuixProducer(StreamingProducer):
 
     def run(
         self,
-        limit: Optional[int] = None,
+        limit: int | None = None,
         realtime: bool = False,
         speed: float = 1.0,
-        rate: Optional[float] = None,
+        rate: float | None = None,
     ) -> None:
         """Run the Quix producer."""
         run_producer(limit=limit, realtime=realtime, speed=speed, rate=rate)

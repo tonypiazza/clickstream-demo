@@ -6,7 +6,6 @@ This data exporter:
 2. Commits Kafka offsets after successful indexing
 """
 
-from typing import Dict
 import logging
 
 if "data_exporter" not in globals():
@@ -25,8 +24,8 @@ def _get_repository():
     global _opensearch_repo
 
     if _opensearch_repo is None:
-        from clickstream.utils.config import get_settings
         from clickstream.infrastructure.search.opensearch import OpenSearchRepository
+        from clickstream.utils.config import get_settings
 
         settings = get_settings()
         _opensearch_repo = OpenSearchRepository(settings)
@@ -36,7 +35,7 @@ def _get_repository():
 
 
 @data_exporter
-def save_to_opensearch(data: Dict, *args, **kwargs) -> Dict:
+def save_to_opensearch(data: dict, *args, **kwargs) -> dict:
     """
     Index events to OpenSearch.
 

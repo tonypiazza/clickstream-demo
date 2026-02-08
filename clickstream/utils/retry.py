@@ -12,7 +12,6 @@ Light retry: 3 attempts over ~7 seconds (for status checks)
 """
 
 import logging
-from typing import Tuple, Type
 
 from tenacity import (
     RetryCallState,
@@ -96,7 +95,7 @@ def log_retry_attempt_light(logger: logging.Logger):
 # ==============================================================================
 
 
-def retry_standard(exception_types: Tuple[Type[Exception], ...], logger: logging.Logger):
+def retry_standard(exception_types: tuple[type[Exception], ...], logger: logging.Logger):
     """
     Create a standard retry decorator (10 attempts, ~60 seconds).
 
@@ -123,7 +122,7 @@ def retry_standard(exception_types: Tuple[Type[Exception], ...], logger: logging
     )
 
 
-def retry_light(exception_types: Tuple[Type[Exception], ...], logger: logging.Logger):
+def retry_light(exception_types: tuple[type[Exception], ...], logger: logging.Logger):
     """
     Create a light retry decorator (3 attempts, ~7 seconds).
 

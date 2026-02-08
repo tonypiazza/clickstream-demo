@@ -9,7 +9,6 @@ Bytewax-specific concerns (batch processing, connection management).
 """
 
 import logging
-from typing import List, Optional
 
 from bytewax.outputs import DynamicSink, StatelessSinkPartition
 from opensearchpy.exceptions import ConnectionError as OSConnectionError
@@ -39,7 +38,7 @@ class OpenSearchEventPartition(StatelessSinkPartition):
         self._repo = OpenSearchRepository(settings)
         self._repo.connect()
 
-    def write_batch(self, items: List[dict]) -> None:
+    def write_batch(self, items: list[dict]) -> None:
         """
         Write a batch of events to OpenSearch.
 
@@ -74,7 +73,7 @@ class OpenSearchEventSink(DynamicSink):
     for each worker.
     """
 
-    def __init__(self, settings: Optional[Settings] = None):
+    def __init__(self, settings: Settings | None = None):
         """
         Initialize the sink.
 

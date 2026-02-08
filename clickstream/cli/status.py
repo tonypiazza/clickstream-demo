@@ -18,7 +18,7 @@ from typing import Any
 
 import psycopg2
 import typer
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from clickstream.cli.shared import (
     BOX_WIDTH,
@@ -30,26 +30,25 @@ from clickstream.cli.shared import (
     _box_header,
     _box_line,
     _empty_line,
+    _section_header_plain,
     get_all_consumer_pids,
     get_consumer_log_file,
     get_consumer_pid_file,
     get_kafka_config,
     get_opensearch_instance,
-    is_opensearch_consumer_running,
     get_process_end_time,
     get_process_pid,
     get_process_start_time,
+    is_opensearch_consumer_running,
     is_process_running,
-    _section_header_plain,
 )
 from clickstream.utils.config import get_settings
 from clickstream.utils.retry import (
     RETRY_ATTEMPTS_LIGHT,
-    RETRY_WAIT_MIN,
     RETRY_WAIT_MAX,
+    RETRY_WAIT_MIN,
     log_retry_attempt_light,
 )
-
 
 # ==============================================================================
 # Data Collection - Individual Functions

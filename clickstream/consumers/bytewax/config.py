@@ -10,7 +10,6 @@ config key names than kafka-python.
 """
 
 import logging
-from typing import Dict, List, Optional
 
 from clickstream.utils.config import get_settings
 from clickstream.utils.paths import get_project_root
@@ -18,7 +17,7 @@ from clickstream.utils.paths import get_project_root
 logger = logging.getLogger(__name__)
 
 
-def get_kafka_brokers() -> List[str]:
+def get_kafka_brokers() -> list[str]:
     """
     Get Kafka broker list for Bytewax.
 
@@ -31,8 +30,8 @@ def get_kafka_brokers() -> List[str]:
 
 
 def get_kafka_add_config(
-    group_id: Optional[str] = None,
-) -> Dict[str, str]:
+    group_id: str | None = None,
+) -> dict[str, str]:
     """
     Build additional Kafka config for Bytewax connectors.
 
@@ -50,7 +49,7 @@ def get_kafka_add_config(
         Dict with confluent-kafka compatible configuration
     """
     settings = get_settings()
-    config: Dict[str, str] = {}
+    config: dict[str, str] = {}
 
     # Consumer group configuration
     if group_id:

@@ -14,7 +14,6 @@ import pytest
 
 from clickstream.consumers.batch_processor import BatchMetrics, _precision
 
-
 # ==============================================================================
 # Helpers
 # ==============================================================================

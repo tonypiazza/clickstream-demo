@@ -12,7 +12,6 @@ import typer
 from clickstream.cli.shared import C, I, get_project_root
 from clickstream.utils.config import get_settings
 
-
 # ==============================================================================
 # Commands
 # ==============================================================================
@@ -171,12 +170,12 @@ def opensearch_init() -> None:
     except requests.exceptions.Timeout:
         print(f"  {C.BRIGHT_RED}{I.CROSS}{C.RESET} Connection to OpenSearch Dashboards timed out")
         print(f"    URL: {C.DIM}{import_url}{C.RESET}")
-        print(f"    Check that the service is running and accessible")
+        print("    Check that the service is running and accessible")
         raise typer.Exit(1)
     except requests.exceptions.ConnectionError:
         print(f"  {C.BRIGHT_RED}{I.CROSS}{C.RESET} Could not connect to OpenSearch Dashboards")
         print(f"    URL: {C.DIM}{import_url}{C.RESET}")
-        print(f"    Check that the service is running and accessible")
+        print("    Check that the service is running and accessible")
         raise typer.Exit(1)
     except requests.exceptions.RequestException as e:
         print(f"  {C.BRIGHT_RED}{I.CROSS}{C.RESET} Failed to import dashboards")

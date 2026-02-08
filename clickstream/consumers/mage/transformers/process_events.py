@@ -6,7 +6,6 @@ This transformer:
 2. Returns events and sessions for downstream export to PostgreSQL
 """
 
-from typing import Dict
 import logging
 
 if "transformer" not in globals():
@@ -41,7 +40,7 @@ def _get_session_state():
 
 
 @transformer
-def process_events(data: Dict, *args, **kwargs) -> Dict:
+def process_events(data: dict, *args, **kwargs) -> dict:
     """
     Process events and update session state.
 
@@ -51,7 +50,6 @@ def process_events(data: Dict, *args, **kwargs) -> Dict:
     Returns:
         Dict with 'events', 'sessions', and 'consumer' for downstream processing
     """
-    from clickstream.utils.config import get_settings
 
     events = data.get("messages", [])
     consumer = data.get("consumer")

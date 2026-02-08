@@ -21,7 +21,6 @@ import pytest
 
 from clickstream.utils.rate_limiter import TokenBucketRateLimiter
 
-
 # ==============================================================================
 # Construction
 # ==============================================================================

@@ -5,7 +5,6 @@ Supports both local Docker (PLAINTEXT) and Aiven (SSL) deployments.
 """
 
 import logging
-
 from typing import Literal
 
 from quixstreams import Application

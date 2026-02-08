@@ -25,14 +25,13 @@ import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logging.getLogger("traitlets").setLevel(logging.ERROR)
 
-import typer
-
 # ==============================================================================
 # App Configuration
 # ==============================================================================
-
 # Set consistent terminal width for help output formatting
 import os
+
+import typer
 
 if "COLUMNS" not in os.environ:
     os.environ["COLUMNS"] = "115"

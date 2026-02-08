@@ -13,13 +13,11 @@ and advanced Kafka configurations from environment variables, we implement
 a custom streaming loop that invokes block functions directly.
 """
 
-import io
 import json
 import logging
-import os
 import signal
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +103,7 @@ def _build_consumer_config(group_id: str, benchmark_mode: bool = False) -> dict:
 
 def execute_streaming_pipeline(
     pipeline_name: str,
-    variables: Optional[Dict[str, Any]] = None,
+    variables: dict[str, Any] | None = None,
 ) -> None:
     """
     Execute a Mage streaming pipeline using custom streaming loop.
@@ -129,7 +127,6 @@ def execute_streaming_pipeline(
     signal.signal(signal.SIGTERM, _signal_handler)
     signal.signal(signal.SIGINT, _signal_handler)
 
-    from confluent_kafka import Consumer, KafkaError
     from clickstream.utils.config import get_settings
 
     settings = get_settings()
@@ -149,6 +146,7 @@ def _run_postgresql_consumer(settings) -> None:
     global _shutdown_requested
 
     from confluent_kafka import Consumer, KafkaError, TopicPartition
+
     from clickstream.consumers.batch_processor import BatchMetrics
     from clickstream.infrastructure.repositories.postgresql import (
         PostgreSQLEventRepository,
@@ -431,6 +429,7 @@ def _run_opensearch_consumer(settings) -> None:
     global _shutdown_requested
 
     from confluent_kafka import Consumer, KafkaError, TopicPartition
+
     from clickstream.infrastructure.search.opensearch import OpenSearchRepository
 
     group_id = settings.opensearch.consumer_group_id

@@ -10,7 +10,7 @@ storing session data as Redis hashes with configurable TTLs.
 
 import json
 import logging
-from typing import Callable, List, Optional
+from collections.abc import Callable
 
 import redis
 from redis.backoff import ExponentialBackoff
@@ -130,7 +130,7 @@ class ValkeySessionStateStore(SessionStateStore):
             "last_activity": str(session["last_activity"]),
         }
 
-    def _execute_pipeline_with_retry(self, pipeline_builder: Callable) -> List:
+    def _execute_pipeline_with_retry(self, pipeline_builder: Callable) -> list:
         """
         Execute a Redis pipeline with retry logic for network resilience.
 
@@ -222,7 +222,7 @@ class ValkeySessionStateStore(SessionStateStore):
     # Additional Methods (beyond ABC)
     # ==========================================================================
 
-    def get_session(self, visitor_id: int) -> Optional[dict]:
+    def get_session(self, visitor_id: int) -> dict | None:
         """
         Get session state for a single visitor.
 

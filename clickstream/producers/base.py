@@ -10,7 +10,6 @@ Producers handle publishing events to Kafka. Available implementations:
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional
 
 
 class StreamingProducer(ABC):
@@ -48,10 +47,10 @@ class StreamingProducer(ABC):
     @abstractmethod
     def run(
         self,
-        limit: Optional[int] = None,
+        limit: int | None = None,
         realtime: bool = False,
         speed: float = 1.0,
-        rate: Optional[float] = None,
+        rate: float | None = None,
     ) -> None:
         """
         Run the producer.

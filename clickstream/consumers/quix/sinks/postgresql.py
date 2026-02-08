@@ -40,9 +40,9 @@ class PostgreSQLSink(BatchingSink):
 
     def __init__(
         self,
-        settings: Optional[Settings] = None,
+        settings: Settings | None = None,
         session_state: Optional["SessionState"] = None,
-        consumer: Optional[Any] = None,
+        consumer: Any | None = None,
     ):
         super().__init__()
         self._settings = settings or get_settings()
@@ -50,7 +50,7 @@ class PostgreSQLSink(BatchingSink):
         self._session_repo = PostgreSQLSessionRepository(self._settings)
         self._session_state = session_state
         self._consumer = consumer  # Quix InternalConsumer for lag monitoring
-        self._batch_metrics: Optional[BatchMetrics] = None
+        self._batch_metrics: BatchMetrics | None = None
 
     def setup(self):
         """Called once when the sink starts."""
@@ -99,7 +99,6 @@ class PostgreSQLSink(BatchingSink):
         if self._consumer is None:
             return
         try:
-            from confluent_kafka import TopicPartition
 
             assignment = self._consumer.assignment()
             if not assignment:

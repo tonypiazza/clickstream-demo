@@ -7,22 +7,21 @@ Producer commands for the clickstream pipeline CLI.
 Commands for starting, stopping, and viewing logs for the Kafka producer.
 """
 
-from typing import Annotated, Optional
+from typing import Annotated
 
 import typer
 
 from clickstream.cli.shared import (
-    C,
-    I,
     PRODUCER_LOG_FILE,
     PRODUCER_PID_FILE,
+    C,
+    I,
     get_process_pid,
     get_project_root,
     is_process_running,
     start_background_process,
     stop_process,
 )
-
 
 # ==============================================================================
 # Helper Functions
@@ -122,7 +121,7 @@ def producer_list() -> None:
 
 def producer_start(
     realtime: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--realtime",
             "-r",
@@ -130,10 +129,10 @@ def producer_start(
         ),
     ] = None,
     limit: Annotated[
-        Optional[int], typer.Option("--limit", "-l", help="Limit number of events (default: all)")
+        int | None, typer.Option("--limit", "-l", help="Limit number of events (default: all)")
     ] = None,
     rate: Annotated[
-        Optional[float],
+        float | None,
         typer.Option("--rate", help="Target events per second (sustained rate via token bucket)"),
     ] = None,
     truncate_log: Annotated[

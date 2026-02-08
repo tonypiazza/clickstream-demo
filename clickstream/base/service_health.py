@@ -13,8 +13,8 @@ Implementations: LocalHealthCheck, AivenHealthCheck
 
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Optional
 
 
 @dataclass
@@ -75,7 +75,7 @@ class ServiceHealthCheck(ABC):
         service_types: list[str],
         timeout: float = 300.0,
         poll_interval: float = 10.0,
-        on_status: Optional[Callable[[dict[str, ServiceStatus]], None]] = None,
+        on_status: Callable[[dict[str, ServiceStatus]], None] | None = None,
     ) -> dict[str, ServiceStatus]:
         """
         Poll until all services are running or timeout.

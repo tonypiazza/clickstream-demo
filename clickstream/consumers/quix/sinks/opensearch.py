@@ -6,7 +6,6 @@ Quix-specific concerns (batching, backpressure).
 """
 
 import logging
-from typing import Optional
 
 from opensearchpy.exceptions import ConnectionError as OSConnectionError
 from opensearchpy.exceptions import ConnectionTimeout
@@ -28,7 +27,7 @@ class OpenSearchEventSink(BatchingSink):
     - Raising SinkBackpressureError on connection errors
     """
 
-    def __init__(self, settings: Optional[Settings] = None):
+    def __init__(self, settings: Settings | None = None):
         super().__init__()
         self._settings = settings or get_settings()
         self._repo = OpenSearchRepository(self._settings)

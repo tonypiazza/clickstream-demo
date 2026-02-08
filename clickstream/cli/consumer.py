@@ -32,17 +32,16 @@ from clickstream.cli.shared import (
     get_consumer_log_file,
     get_consumer_pid_file,
     get_opensearch_instance,
+    get_process_pid,
+    get_project_root,
     get_topic_partition_count,
     is_opensearch_consumer_running,
     start_consumer_instance,
     start_opensearch_consumer,
     stop_all_consumers,
     stop_opensearch_consumer,
-    get_process_pid,
-    get_project_root,
 )
 from clickstream.utils.config import get_settings
-
 
 # ==============================================================================
 # Helper Functions
@@ -250,7 +249,7 @@ def consumer_start(
     if truncate_log:
         for log_path in glob_module.glob("/tmp/consumer_*_*.log"):
             Path(log_path).unlink()
-        print(f"  Log files truncated")
+        print("  Log files truncated")
 
     # Get paths
     project_root = get_project_root()
@@ -289,7 +288,7 @@ def consumer_start(
                 f"{C.BRIGHT_GREEN}{I.CHECK} PostgreSQL consumer started "
                 f"({pg_consumer.parallelism_description}){C.RESET}"
             )
-            print(f"  Logs:")
+            print("  Logs:")
             for i in range(num_instances):
                 log_file = get_consumer_log_file(i, "postgresql")
                 print(f"    {C.DIM}{log_file}{C.RESET}")
@@ -297,7 +296,7 @@ def consumer_start(
             print(
                 f"{C.BRIGHT_RED}{I.CROSS} Only {len(running)}/{num_instances} PostgreSQL consumers started{C.RESET}"
             )
-            print(f"  Check logs for errors")
+            print("  Check logs for errors")
             raise typer.Exit(1)
 
     # Initialize and start OpenSearch consumer if enabled
@@ -335,7 +334,7 @@ def consumer_start(
             print(f"{C.BRIGHT_RED}{I.CROSS} Failed to initialize OpenSearch: {e}{C.RESET}")
             raise typer.Exit(1)
 
-        print(f"  Starting OpenSearch consumer...")
+        print("  Starting OpenSearch consumer...")
         start_opensearch_consumer(project_root)
         time.sleep(2)
 
@@ -402,7 +401,7 @@ def consumer_stop(
         )
 
     if stop_opensearch and opensearch_running:
-        print(f"  Stopping OpenSearch consumer...")
+        print("  Stopping OpenSearch consumer...")
         stop_opensearch_consumer()
         print(f"{C.BRIGHT_GREEN}{I.CHECK} OpenSearch consumer stopped{C.RESET}")
 
@@ -444,7 +443,7 @@ def consumer_restart(
         stop_all_consumers()
 
     if restart_opensearch and opensearch_running:
-        print(f"  Stopping OpenSearch consumer...")
+        print("  Stopping OpenSearch consumer...")
         stop_opensearch_consumer()
 
     if (restart_postgresql and running > 0) or (restart_opensearch and opensearch_running):
@@ -525,7 +524,7 @@ def consumer_logs(
 
     # Get user selection
     try:
-        selection = input(f"  Enter number (or 'q' to quit): ").strip().lower()
+        selection = input("  Enter number (or 'q' to quit): ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         print()
         return

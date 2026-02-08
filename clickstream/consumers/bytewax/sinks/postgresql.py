@@ -9,7 +9,7 @@ Bytewax-specific concerns (batch processing, connection management).
 """
 
 import logging
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Optional
 
 import psycopg2
 from bytewax.outputs import DynamicSink, StatelessSinkPartition
@@ -60,7 +60,7 @@ class PostgreSQLPartition(StatelessSinkPartition):
             log=logger,
         )
 
-    def write_batch(self, items: List[dict]) -> None:
+    def write_batch(self, items: list[dict]) -> None:
         """
         Write a batch of events and sessions to PostgreSQL.
 
@@ -95,7 +95,7 @@ class PostgreSQLPartition(StatelessSinkPartition):
         self._event_repo.reconnect()
         self._session_repo.reconnect()
 
-    def _retry_batch(self, items: List[dict]) -> None:
+    def _retry_batch(self, items: list[dict]) -> None:
         """
         Retry processing a batch after reconnection.
 
@@ -130,7 +130,7 @@ class PostgreSQLSink(DynamicSink):
 
     def __init__(
         self,
-        settings: Optional[Settings] = None,
+        settings: Settings | None = None,
         session_state: Optional["SessionState"] = None,
     ):
         """

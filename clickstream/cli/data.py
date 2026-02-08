@@ -7,25 +7,23 @@ Data management commands for the clickstream pipeline CLI.
 Commands for resetting data stores (Kafka, PostgreSQL, Valkey, OpenSearch).
 """
 
-import os
 import warnings
 from typing import Annotated
 
 import typer
 
 from clickstream.cli.shared import (
+    PRODUCER_PID_FILE,
     C,
     I,
-    PRODUCER_PID_FILE,
+    check_db_connection,
     count_running_consumers,
     is_opensearch_consumer_running,
+    is_process_running,
     purge_kafka_topic,
     reset_consumer_group,
-    check_db_connection,
-    is_process_running,
 )
 from clickstream.utils.config import get_settings
-
 
 # ==============================================================================
 # Commands
@@ -56,7 +54,7 @@ def data_reset(
     settings = get_settings()
 
     print()
-    print(f"  Checking processes...")
+    print("  Checking processes...")
 
     # Check PostgreSQL consumer is stopped (check for any running instances)
     running_consumers = count_running_consumers()
@@ -127,7 +125,7 @@ def data_reset(
         raise typer.Exit(1)
 
     # 3. Flush Valkey
-    print(f"  Flushing Valkey...")
+    print("  Flushing Valkey...")
     if check_valkey_connection():
         try:
             client = get_valkey_client()
@@ -164,10 +162,9 @@ def data_reset(
 
     # 5. Delete OpenSearch index (try if reachable, regardless of enabled setting)
     index_name = settings.opensearch.events_index
-    print(f"  Checking OpenSearch for cleanup...")
+    print("  Checking OpenSearch for cleanup...")
     try:
         import urllib3
-
         from opensearchpy import OpenSearch
 
         # Suppress SSL warnings for local self-signed certs

@@ -9,9 +9,9 @@ Mage streaming pipelines expect:
 - Each message is passed to downstream blocks for processing
 """
 
-from typing import Dict, Generator
 import json
 import logging
+from collections.abc import Generator
 
 if "data_loader" not in globals():
     from mage_ai.data_preparation.decorators import data_loader
@@ -75,7 +75,7 @@ def _build_consumer_config() -> dict:
 
 
 @data_loader
-def load_from_kafka(*args, **kwargs) -> Generator[Dict, None, None]:
+def load_from_kafka(*args, **kwargs) -> Generator[dict, None, None]:
     """
     Load streaming events from Kafka.
 
@@ -87,6 +87,7 @@ def load_from_kafka(*args, **kwargs) -> Generator[Dict, None, None]:
         and 'consumer' key for offset commit after processing.
     """
     from confluent_kafka import Consumer, KafkaError
+
     from clickstream.utils.config import get_settings
 
     settings = get_settings()

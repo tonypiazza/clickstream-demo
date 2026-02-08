@@ -17,7 +17,7 @@ This allows the logic to be:
 - Composed with different persistence backends
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 class SessionProcessor:
@@ -213,8 +213,8 @@ class SessionProcessor:
             - items_purchased: list[int]
             - converted: bool (True if transaction_count > 0)
         """
-        session_start = datetime.fromtimestamp(session["session_start"] / 1000.0, tz=timezone.utc)
-        session_end = datetime.fromtimestamp(session["session_end"] / 1000.0, tz=timezone.utc)
+        session_start = datetime.fromtimestamp(session["session_start"] / 1000.0, tz=UTC)
+        session_end = datetime.fromtimestamp(session["session_end"] / 1000.0, tz=UTC)
         duration_seconds = int((session_end - session_start).total_seconds())
 
         return {

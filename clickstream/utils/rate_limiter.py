@@ -18,7 +18,6 @@ Usage::
 
 import time
 from collections.abc import Callable
-from typing import Optional
 
 
 class TokenBucketRateLimiter:
@@ -36,8 +35,8 @@ class TokenBucketRateLimiter:
     def __init__(
         self,
         rate: float,
-        burst: Optional[int] = None,
-        shutdown_check: Optional[Callable[[], bool]] = None,
+        burst: int | None = None,
+        shutdown_check: Callable[[], bool] | None = None,
     ) -> None:
         if rate <= 0:
             raise ValueError(f"rate must be positive, got {rate}")

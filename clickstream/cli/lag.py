@@ -11,7 +11,7 @@ using time-series data stored in Valkey.
 import json as _json
 import re
 from datetime import datetime
-from typing import Annotated, Optional
+from typing import Annotated
 
 import typer
 from rich.console import Console
@@ -20,7 +20,6 @@ from rich.table import Table
 from clickstream.cli.shared import C, I
 from clickstream.infrastructure.metrics import get_lag_history, get_lag_trend
 from clickstream.utils.config import get_settings
-
 
 # ==============================================================================
 # Helper Functions

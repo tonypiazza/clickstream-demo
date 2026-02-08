@@ -22,7 +22,6 @@ from clickstream.cli.shared import (
 )
 from clickstream.utils.config import get_settings
 
-
 # ==============================================================================
 # Commands
 # ==============================================================================
@@ -273,7 +272,7 @@ def config_generate(
         print(
             f"{C.BRIGHT_RED}{I.CROSS} Missing required Terraform outputs: {', '.join(missing)}{C.RESET}"
         )
-        print(f"    Ensure 'terraform apply' completed successfully")
+        print("    Ensure 'terraform apply' completed successfully")
         raise typer.Exit(1)
 
     # Read terraform.tfvars for topic configuration (if exists)
@@ -320,7 +319,7 @@ def config_generate(
         print(
             f"{C.BRIGHT_RED}{I.CROSS} OpenSearch is enabled in terraform.tfvars but no connection details found{C.RESET}"
         )
-        print(f"    Ensure 'terraform apply' completed successfully")
+        print("    Ensure 'terraform apply' completed successfully")
         raise typer.Exit(1)
 
     # Write SSL certificate files for Aiven mTLS authentication
@@ -528,7 +527,7 @@ def config_generate(
         print(f"    OpenSearch: {C.DIM}disabled{C.RESET}")
 
     print()
-    print(f"  Next steps:")
+    print("  Next steps:")
     print(f"    1. {C.WHITE}clickstream consumer start{C.RESET}")
     print(f"    2. {C.WHITE}clickstream producer start --limit 10000{C.RESET}")
     print()

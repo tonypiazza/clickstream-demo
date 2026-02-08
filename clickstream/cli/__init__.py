@@ -14,14 +14,14 @@ from clickstream.cli.shared import (
     BOX_WIDTH,
     PRODUCER_LOG_FILE,
     PRODUCER_PID_FILE,
-    # Classes
-    Box,
-    Colors,
-    Icons,
     # Aliases
     B,
+    # Classes
+    Box,
     C,
+    Colors,
     I,
+    Icons,
     # Box drawing helpers (private)
     _box_bottom,
     _box_header,
@@ -31,39 +31,39 @@ from clickstream.cli.shared import (
     _section_header_plain,
     _status_badge,
     _visible_len,
+    # Database helpers
+    check_db_connection,
+    check_kafka_connection,
+    # Multi-consumer management
+    count_running_consumers,
+    # Framework helpers
+    get_active_framework_name,
+    get_all_consumer_pids,
     # Path helpers
     get_consumer_log_file,
     get_consumer_pid_file,
-    get_opensearch_instance,
+    # Kafka helpers
+    get_kafka_admin_client,
+    get_kafka_config,
     get_mage_project_path,
-    get_project_root,
-    # Framework helpers
-    get_active_framework_name,
+    get_opensearch_instance,
     # Process management
     get_process_end_time,
     get_process_pid,
     get_process_start_time,
-    is_process_running,
-    start_background_process,
-    stop_process,
-    # Multi-consumer management
-    count_running_consumers,
-    get_all_consumer_pids,
+    get_project_root,
     get_topic_partition_count,
-    start_consumer_instance,
-    stop_all_consumers,
     # OpenSearch consumer management
     is_opensearch_consumer_running,
-    start_opensearch_consumer,
-    stop_opensearch_consumer,
-    # Kafka helpers
-    get_kafka_admin_client,
-    get_kafka_config,
+    is_process_running,
     purge_kafka_topic,
     reset_consumer_group,
-    # Database helpers
-    check_db_connection,
-    check_kafka_connection,
+    start_background_process,
+    start_consumer_instance,
+    start_opensearch_consumer,
+    stop_all_consumers,
+    stop_opensearch_consumer,
+    stop_process,
 )
 
 __all__ = [

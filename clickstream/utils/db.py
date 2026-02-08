@@ -13,14 +13,14 @@ from pathlib import Path
 
 import psycopg2
 from jinja2 import Template
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from clickstream.utils.config import get_settings
 from clickstream.utils.paths import get_init_sql_path
 from clickstream.utils.retry import (
     RETRY_ATTEMPTS,
-    RETRY_WAIT_MIN,
     RETRY_WAIT_MAX,
+    RETRY_WAIT_MIN,
     log_retry_attempt,
 )
 

@@ -7,7 +7,6 @@ This data exporter:
 3. Commits Kafka offsets after successful persistence
 """
 
-from typing import Dict
 import logging
 
 if "data_exporter" not in globals():
@@ -27,11 +26,11 @@ def _get_repositories():
     global _event_repo, _session_repo
 
     if _event_repo is None or _session_repo is None:
-        from clickstream.utils.config import get_settings
         from clickstream.infrastructure.repositories.postgresql import (
             PostgreSQLEventRepository,
             PostgreSQLSessionRepository,
         )
+        from clickstream.utils.config import get_settings
 
         settings = get_settings()
 
@@ -45,7 +44,7 @@ def _get_repositories():
 
 
 @data_exporter
-def save_to_postgresql(data: Dict, *args, **kwargs) -> Dict:
+def save_to_postgresql(data: dict, *args, **kwargs) -> dict:
     """
     Save events and sessions to PostgreSQL.
 

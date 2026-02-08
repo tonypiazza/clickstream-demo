@@ -15,7 +15,6 @@ All metrics are stored in Valkey/Redis with appropriate TTLs.
 import json
 import logging
 import time
-from typing import Optional
 
 from clickstream.infrastructure.cache import ValkeyCache
 
@@ -98,7 +97,7 @@ class PipelineMetrics:
     # Throughput Stats Tracking
     # ==========================================================================
 
-    def record_stats_sample(self, source: str, count: int, count2: Optional[int] = None) -> None:
+    def record_stats_sample(self, source: str, count: int, count2: int | None = None) -> None:
         """
         Record a stats sample in Valkey.
 
@@ -380,7 +379,7 @@ def set_producer_messages(count: int) -> None:
     _get_metrics().set_producer_messages(count)
 
 
-def record_stats_sample(source: str, count: int, count2: Optional[int] = None) -> None:
+def record_stats_sample(source: str, count: int, count2: int | None = None) -> None:
     """Record a stats sample."""
     _get_metrics().record_stats_sample(source, count, count2)
 

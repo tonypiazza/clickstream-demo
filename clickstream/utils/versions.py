@@ -5,7 +5,7 @@
 Utilities for retrieving package versions.
 """
 
-from importlib.metadata import version, PackageNotFoundError
+from importlib.metadata import PackageNotFoundError, version
 
 
 def get_clickstream_version() -> str:

@@ -9,8 +9,7 @@ Provides:
 """
 
 import logging
-from datetime import datetime, timezone
-from typing import Optional, Tuple
+from datetime import UTC, datetime
 
 from opensearchpy import OpenSearch
 from opensearchpy.helpers import bulk
@@ -30,7 +29,7 @@ class OpenSearchRepository(SearchRepository):
     visitor_id, timestamp, event type, and item_id.
     """
 
-    def __init__(self, settings: Optional[Settings] = None, index_name: Optional[str] = None):
+    def __init__(self, settings: Settings | None = None, index_name: str | None = None):
         """
         Initialize the OpenSearch repository.
 
@@ -39,7 +38,7 @@ class OpenSearchRepository(SearchRepository):
             index_name: Override index name. If None, uses settings.opensearch.events_index.
         """
         self._settings = settings or get_settings()
-        self._client: Optional[OpenSearch] = None
+        self._client: OpenSearch | None = None
         self._index = index_name or self._settings.opensearch.events_index
 
     @property
@@ -48,7 +47,7 @@ class OpenSearchRepository(SearchRepository):
         return self._index
 
     @property
-    def client(self) -> Optional[OpenSearch]:
+    def client(self) -> OpenSearch | None:
         """Get the OpenSearch client."""
         return self._client
 
@@ -100,7 +99,7 @@ class OpenSearchRepository(SearchRepository):
         actions = []
         for doc in documents:
             # Convert timestamp (Unix ms) to ISO format
-            event_time = datetime.fromtimestamp(doc["timestamp"] / 1000.0, tz=timezone.utc)
+            event_time = datetime.fromtimestamp(doc["timestamp"] / 1000.0, tz=UTC)
 
             # Create document with explicit _id for deduplication
             doc_id = f"{doc['visitor_id']}_{doc['timestamp']}_{doc['event']}_{doc['item_id']}"
@@ -138,7 +137,7 @@ class OpenSearchRepository(SearchRepository):
         logger.debug("Indexed %d documents to OpenSearch", success)
         return success
 
-    def save_with_errors(self, documents: list[dict]) -> Tuple[int, list]:
+    def save_with_errors(self, documents: list[dict]) -> tuple[int, list]:
         """
         Index documents to OpenSearch, returning detailed error info.
 
@@ -157,7 +156,7 @@ class OpenSearchRepository(SearchRepository):
         # Transform documents to bulk format
         actions = []
         for doc in documents:
-            event_time = datetime.fromtimestamp(doc["timestamp"] / 1000.0, tz=timezone.utc)
+            event_time = datetime.fromtimestamp(doc["timestamp"] / 1000.0, tz=UTC)
             doc_id = f"{doc['visitor_id']}_{doc['timestamp']}_{doc['event']}_{doc['item_id']}"
 
             actions.append(
@@ -196,7 +195,7 @@ class OpenSearchRepository(SearchRepository):
                 self._client = None
 
 
-def check_opensearch_connection(settings: Optional[Settings] = None) -> bool:
+def check_opensearch_connection(settings: Settings | None = None) -> bool:
     """
     Check if OpenSearch is reachable.
 

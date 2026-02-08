@@ -7,11 +7,16 @@ Shared utilities for the clickstream pipeline.
 This module exports configuration and models for use throughout the pipeline.
 """
 
+from clickstream.core.models import (
+    ClickstreamEvent,
+    EventType,
+    Session,
+)
 from clickstream.utils.config import (
     KafkaSettings,
     OpenSearchSettings,
-    PostgresSettings,
     PostgreSQLConsumerSettings,
+    PostgresSettings,
     ProducerSettings,
     Settings,
     get_settings,
@@ -23,11 +28,6 @@ from clickstream.utils.db import (
 from clickstream.utils.kafka import (
     REQUIRED_EVENT_FIELDS,
     parse_kafka_messages,
-)
-from clickstream.core.models import (
-    ClickstreamEvent,
-    EventType,
-    Session,
 )
 
 __all__ = [

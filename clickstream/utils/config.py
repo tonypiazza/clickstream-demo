@@ -10,7 +10,7 @@ All configuration is loaded from environment variables, with support for
 
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from clickstream.base.service_health import ServiceHealthCheck
@@ -33,21 +33,21 @@ class AivenSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="AIVEN_")
 
-    api_token: Optional[str] = Field(default=None, description="Aiven API token")
-    project_name: Optional[str] = Field(default=None, description="Aiven project name")
+    api_token: str | None = Field(default=None, description="Aiven API token")
+    project_name: str | None = Field(default=None, description="Aiven project name")
 
     # Service names (derived from project_name by default)
     # Override these if using custom service names
-    kafka_service_name: Optional[str] = Field(
+    kafka_service_name: str | None = Field(
         default=None, description="Kafka service name (defaults to {project}-kafka)"
     )
-    pg_service_name: Optional[str] = Field(
+    pg_service_name: str | None = Field(
         default=None, description="PostgreSQL service name (defaults to {project}-pg)"
     )
-    opensearch_service_name: Optional[str] = Field(
+    opensearch_service_name: str | None = Field(
         default=None, description="OpenSearch service name (defaults to {project}-opensearch)"
     )
-    valkey_service_name: Optional[str] = Field(
+    valkey_service_name: str | None = Field(
         default=None, description="Valkey service name (defaults to {project}-valkey)"
     )
 
@@ -87,11 +87,11 @@ class KafkaSettings(BaseSettings):
     )
 
     # SSL settings for Aiven mTLS authentication
-    ssl_ca_file: Optional[str] = Field(default=None, description="Path to CA certificate file")
-    ssl_cert_file: Optional[str] = Field(
+    ssl_ca_file: str | None = Field(default=None, description="Path to CA certificate file")
+    ssl_cert_file: str | None = Field(
         default=None, description="Path to client certificate file"
     )
-    ssl_key_file: Optional[str] = Field(default=None, description="Path to client private key file")
+    ssl_key_file: str | None = Field(default=None, description="Path to client private key file")
 
     # Topic configuration
     events_topic: str = Field(default="clickstream-events", description="Events topic name")
@@ -129,7 +129,7 @@ class ValkeySettings(BaseSettings):
 
     host: str = Field(default="localhost", description="Valkey host")
     port: int = Field(default=6379, description="Valkey port")
-    password: Optional[str] = Field(default=None, description="Valkey password")
+    password: str | None = Field(default=None, description="Valkey password")
     db: int = Field(default=0, description="Valkey database number")
     ssl: bool = Field(default=False, description="Use SSL/TLS connection")
 
@@ -191,7 +191,7 @@ class ProducerSettings(BaseSettings):
         description="Producer implementation (confluent, kafka_python, quix)",
     )
     data_file: Path = Field(default=Path("data/events.csv"), description="Path to events CSV file")
-    rate: Optional[float] = Field(
+    rate: float | None = Field(
         default=None,
         description="Target events per second (token bucket rate limiter)",
     )

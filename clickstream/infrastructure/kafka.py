@@ -15,7 +15,8 @@ Supports both PLAINTEXT (local Docker) and SSL (Aiven mTLS) security protocols.
 
 import logging
 import time
-from typing import TYPE_CHECKING, Dict, Generator, List, Optional
+from collections.abc import Generator
+from typing import TYPE_CHECKING
 
 from clickstream.utils.config import get_settings
 from clickstream.utils.paths import get_project_root
@@ -180,7 +181,7 @@ def list_topics() -> list[str]:
         admin.close()
 
 
-def get_topic_partition_count(topic_name: str) -> Optional[int]:
+def get_topic_partition_count(topic_name: str) -> int | None:
     """
     Get the number of partitions for a Kafka topic.
 
@@ -375,8 +376,8 @@ def get_consumer_lag(
 
 
 def parse_kafka_messages(
-    messages: List[Dict],
-) -> Generator[Dict, None, None]:
+    messages: list[dict],
+) -> Generator[dict, None, None]:
     """
     Parse Kafka messages and yield valid event dictionaries.
 

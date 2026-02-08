@@ -31,7 +31,7 @@ Usage (framework-managed sinks):
 
 import logging
 import time
-from typing import Callable, Optional
+from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +56,8 @@ class BatchMetrics:
         session_state,
         session_repo,
         summary_interval_seconds: float = 30.0,
-        on_summary: Optional[Callable[[], None]] = None,
-        log: Optional[logging.Logger] = None,
+        on_summary: Callable[[], None] | None = None,
+        log: logging.Logger | None = None,
         max_poll_interval_ms: int = 300_000,
     ):
         """

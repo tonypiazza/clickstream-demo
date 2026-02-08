@@ -19,7 +19,6 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 from clickstream.utils.config import get_settings
 from clickstream.utils.paths import (
@@ -211,7 +210,7 @@ def check_kafka_connection() -> bool:
 # ==============================================================================
 
 
-def get_process_pid(pid_file: Path) -> Optional[int]:
+def get_process_pid(pid_file: Path) -> int | None:
     """Get the PID from a PID file, if the process is still running (not zombie).
 
     Note: We check for zombie status because detached processes (started with
@@ -247,7 +246,7 @@ def is_process_running(pid_file: Path) -> bool:
     return get_process_pid(pid_file) is not None
 
 
-def get_process_start_time(pid: Optional[int]) -> Optional[str]:
+def get_process_start_time(pid: int | None) -> str | None:
     """Get the start time of a process from its PID using psutil."""
     if pid is None:
         return None
@@ -261,7 +260,7 @@ def get_process_start_time(pid: Optional[int]) -> Optional[str]:
         return None
 
 
-def get_process_end_time(log_file: Path) -> Optional[str]:
+def get_process_end_time(log_file: Path) -> str | None:
     """Get the end time from the log file.
 
     Looks for a "shutdown complete" message first. If not found,
@@ -333,7 +332,7 @@ def start_background_process(
     pid_file: Path,
     log_file: Path,
     name: str,
-    extra_env: Optional[dict] = None,
+    extra_env: dict | None = None,
 ) -> bool:
     """Start a background process. Returns True if started successfully."""
     project_root = get_project_root()
@@ -406,7 +405,7 @@ def start_consumer_instance(
     instance: int,
     project_root: Path,
     benchmark_mode: bool = False,
-    impl_override: Optional[str] = None,
+    impl_override: str | None = None,
 ) -> bool:
     """Start a single PostgreSQL consumer instance. Returns True if started successfully.
 
@@ -498,7 +497,7 @@ def stop_all_consumers() -> int:
     return len(gone) + len(alive)
 
 
-def get_topic_partition_count(topic_name: str) -> Optional[int]:
+def get_topic_partition_count(topic_name: str) -> int | None:
     """Get the number of partitions for a Kafka topic. Returns None if topic doesn't exist."""
     from clickstream.infrastructure.kafka import get_topic_partition_count as _get_partition_count
 

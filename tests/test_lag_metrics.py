@@ -18,7 +18,6 @@ import time
 
 from clickstream.infrastructure.metrics import LAG_SAMPLES_KEY_PREFIX
 
-
 # ==============================================================================
 # record_lag_sample
 # ==============================================================================

@@ -17,24 +17,24 @@ import time
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
 from clickstream.cli.shared import (
+    PRODUCER_PID_FILE,
     C,
     I,
-    PRODUCER_PID_FILE,
     count_running_consumers,
     get_all_consumer_pids,
+    get_project_root,
+    is_process_running,
     purge_kafka_topic,
     reset_consumer_group,
     start_consumer_instance,
     stop_all_consumers,
-    get_project_root,
-    is_process_running,
 )
 from clickstream.consumers import get_consumer
 from clickstream.utils.config import get_settings
@@ -56,7 +56,7 @@ def _get_csv_row_count(filepath: Path) -> int:
     Returns:
         Number of data rows (excluding header)
     """
-    with open(filepath, "r") as f:
+    with open(filepath) as f:
         # Count lines and subtract 1 for header
         return sum(1 for _ in f) - 1
 
@@ -357,7 +357,7 @@ def _print_summary(results: list[tuple[int, int]], is_incremental: bool) -> None
 
 def benchmark_run(
     limit: Annotated[
-        Optional[int],
+        int | None,
         typer.Option("--limit", "-l", help="Number of events to produce (default: all)"),
     ] = None,
     output: Annotated[Path, typer.Option("--output", "-o", help="Output CSV file")] = Path(
@@ -385,7 +385,7 @@ def benchmark_run(
         int, typer.Option("--offset", help="Number of rows to skip in CSV (0 = start at row 1)")
     ] = 0,
     impl: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--consumer-impl",
             help="Override consumer implementation (confluent, kafka_python, quix, mage, bytewax)",
@@ -454,7 +454,8 @@ def benchmark_run(
             )
             raise typer.Exit(1)
         # Check that the package is installed
-        from importlib.metadata import PackageNotFoundError, version as pkg_version
+        from importlib.metadata import PackageNotFoundError
+        from importlib.metadata import version as pkg_version
 
         package_name = impl_packages[impl]
         try:
@@ -845,7 +846,7 @@ def _format_duration(seconds: int) -> str:
 
 def benchmark_show(
     file: Annotated[
-        Optional[Path], typer.Option("--file", "-f", help="Benchmark results CSV file")
+        Path | None, typer.Option("--file", "-f", help="Benchmark results CSV file")
     ] = None,
     ramp: Annotated[bool, typer.Option("--ramp", help="Show ramp test results")] = False,
     run: Annotated[bool, typer.Option("--run", help="Show run test results (default)")] = False,
@@ -853,15 +854,15 @@ def benchmark_show(
         bool, typer.Option("--all", help="Show all runs instead of latest (ramp only)")
     ] = False,
     environment: Annotated[
-        Optional[str],
+        str | None,
         typer.Option("--environment", "-e", help="Filter by environment (local/aiven)"),
     ] = None,
     since: Annotated[
-        Optional[str],
+        str | None,
         typer.Option("--since", help="Show results since date (ISO or relative: 7d, 2w, 1m)"),
     ] = None,
     until: Annotated[
-        Optional[str], typer.Option("--until", help="Show results until date (ISO format)")
+        str | None, typer.Option("--until", help="Show results until date (ISO format)")
     ] = None,
     summary: Annotated[
         bool, typer.Option("--summary", "-s", help="Show summary statistics")
@@ -905,9 +906,9 @@ def benchmark_show(
 
 def _show_run_results(
     file: Path,
-    environment: Optional[str],
-    since: Optional[str],
-    until: Optional[str],
+    environment: str | None,
+    since: str | None,
+    until: str | None,
     summary: bool,
 ) -> None:
     """Display benchmark run results (original format)."""
@@ -924,8 +925,8 @@ def _show_run_results(
         raise typer.Exit(1)
 
     # Parse date filters
-    since_dt: Optional[datetime] = None
-    until_dt: Optional[datetime] = None
+    since_dt: datetime | None = None
+    until_dt: datetime | None = None
     if since:
         since_dt = _parse_date(since)
     if until:
@@ -1057,8 +1058,8 @@ def _show_run_results(
 
 def _show_ramp_results(
     file: Path,
-    since: Optional[str],
-    until: Optional[str],
+    since: str | None,
+    until: str | None,
     summary: bool,
     all_runs: bool = False,
 ) -> None:
@@ -1069,8 +1070,8 @@ def _show_ramp_results(
         raise typer.Exit(1)
 
     # Parse date filters
-    since_dt: Optional[datetime] = None
-    until_dt: Optional[datetime] = None
+    since_dt: datetime | None = None
+    until_dt: datetime | None = None
     if since:
         since_dt = _parse_date(since)
     if until:
@@ -1111,7 +1112,7 @@ def _show_ramp_results(
     has_run_id = "run_id" in headers
     if has_run_id and not all_runs:
         # Find the latest run_id by max timestamp
-        latest_run_id: Optional[str] = None
+        latest_run_id: str | None = None
         latest_ts = ""
         for row in filtered_rows:
             rid = row.get("run_id", "")
@@ -1192,8 +1193,8 @@ def _show_ramp_results(
         table.add_column("Samples", justify="right")
 
         # Detect saturation point: first step where dominant trend is "growing"
-        saturation_rate: Optional[int] = None
-        peak_sustainable_rate: Optional[int] = None
+        saturation_rate: int | None = None
+        peak_sustainable_rate: int | None = None
 
         trend_icons = {
             "growing": "[bright_red]\u2191 growing[/]",
@@ -1382,7 +1383,7 @@ def benchmark_ramp(
         int, typer.Option("--step-duration", help="Seconds to hold each rate level")
     ] = 60,
     impl: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--consumer-impl",
             help="Override consumer implementation (confluent, kafka_python, quix, mage, bytewax)",
@@ -1457,7 +1458,8 @@ def benchmark_ramp(
                 f"Valid options: {', '.join(valid_impls)}{C.RESET}"
             )
             raise typer.Exit(1)
-        from importlib.metadata import PackageNotFoundError, version as pkg_version
+        from importlib.metadata import PackageNotFoundError
+        from importlib.metadata import version as pkg_version
 
         package_name = impl_packages[impl]
         try:
@@ -1841,8 +1843,8 @@ def benchmark_ramp(
                 steps_seen[s] = []
             steps_seen[s].append(row.get("lag_trend", "unknown"))
 
-        saturation_rate: Optional[int] = None
-        peak_sustainable: Optional[int] = None
+        saturation_rate: int | None = None
+        peak_sustainable: int | None = None
 
         for s in sorted(steps_seen):
             trends = steps_seen[s]

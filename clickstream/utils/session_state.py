@@ -18,8 +18,7 @@ Session State Schema (per visitor):
 
 import json
 import logging
-from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from datetime import UTC, datetime
 
 import redis
 from redis.backoff import ExponentialBackoff
@@ -114,7 +113,7 @@ class SessionState:
     def _meta_key(self, visitor_id: int) -> str:
         return f"{self.META_PREFIX}{visitor_id}"
 
-    def _execute_pipeline_with_retry(self, pipeline_builder) -> List:
+    def _execute_pipeline_with_retry(self, pipeline_builder) -> list:
         """
         Execute a Redis pipeline with retry logic for network resilience.
 
@@ -124,8 +123,9 @@ class SessionState:
         Returns:
             List of results from pipeline execution
         """
-        from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-        from clickstream.utils.retry import RETRY_ATTEMPTS, RETRY_WAIT_MIN, RETRY_WAIT_MAX
+        from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+
+        from clickstream.utils.retry import RETRY_ATTEMPTS, RETRY_WAIT_MAX, RETRY_WAIT_MIN
 
         @retry(
             stop=stop_after_attempt(RETRY_ATTEMPTS),
@@ -140,7 +140,7 @@ class SessionState:
 
         return _execute()
 
-    def get_session(self, visitor_id: int) -> Optional[dict]:
+    def get_session(self, visitor_id: int) -> dict | None:
         """
         Get current session state for a visitor.
 
@@ -262,7 +262,7 @@ class SessionState:
 
         return current, is_new_session
 
-    def batch_update_sessions(self, events: List[Dict]) -> List[Dict]:
+    def batch_update_sessions(self, events: list[dict]) -> list[dict]:
         """
         Batch update sessions for multiple events using Redis pipelining.
 
@@ -292,7 +292,7 @@ class SessionState:
         )
 
         # 3. Parse fetched sessions into a local dict
-        sessions: Dict[int, Dict] = {}
+        sessions: dict[int, dict] = {}
         for vid, data in zip(visitor_ids, results):
             if data:
                 sessions[vid] = {
@@ -407,8 +407,8 @@ class SessionState:
             Dict ready for PostgreSQL insert/upsert
         """
         # Convert timestamps to datetime
-        session_start = datetime.fromtimestamp(session["session_start"] / 1000.0, tz=timezone.utc)
-        session_end = datetime.fromtimestamp(session["session_end"] / 1000.0, tz=timezone.utc)
+        session_start = datetime.fromtimestamp(session["session_start"] / 1000.0, tz=UTC)
+        session_end = datetime.fromtimestamp(session["session_end"] / 1000.0, tz=UTC)
         duration_seconds = int((session_end - session_start).total_seconds())
 
         return {
@@ -478,7 +478,7 @@ STATS_SAMPLES_KEY_PREFIX = "clickstream:stats:samples:"
 STATS_TTL_SECONDS = 3600  # 1 hour
 
 
-def record_stats_sample(source: str, count: int, count2: Optional[int] = None) -> None:
+def record_stats_sample(source: str, count: int, count2: int | None = None) -> None:
     """Record a stats sample."""
     from clickstream.infrastructure.metrics import record_stats_sample as _impl
 

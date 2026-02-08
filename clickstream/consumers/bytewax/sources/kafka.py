@@ -19,11 +19,12 @@ Key differences from Bytewax's built-in KafkaSource:
 
 import logging
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Optional
 
 from bytewax.inputs import FixedPartitionedSource, StatefulSourcePartition
-from confluent_kafka import Consumer, TopicPartition, OFFSET_BEGINNING
+from confluent_kafka import OFFSET_BEGINNING, Consumer, TopicPartition
 from confluent_kafka import KafkaError as ConfluentKafkaError
 from confluent_kafka.admin import AdminClient
 
@@ -38,19 +39,19 @@ class KafkaSourceMessage:
     Compatible with Bytewax's KafkaSourceMessage for downstream processing.
     """
 
-    key: Optional[bytes]
+    key: bytes | None
     """Message key."""
 
-    value: Optional[bytes]
+    value: bytes | None
     """Message value."""
 
     topic: str
     """Topic the message was consumed from."""
 
-    headers: List[Tuple[str, bytes]] = field(default_factory=list)
+    headers: list[tuple[str, bytes]] = field(default_factory=list)
     """Message headers."""
 
-    latency: Optional[float] = None
+    latency: float | None = None
     """Broker latency in seconds."""
 
     offset: int = 0
@@ -59,7 +60,7 @@ class KafkaSourceMessage:
     partition: int = 0
     """Partition the message was consumed from."""
 
-    timestamp: Tuple[int, int] = (0, 0)
+    timestamp: tuple[int, int] = (0, 0)
     """Message timestamp as (type, value) tuple."""
 
 
@@ -101,11 +102,11 @@ class _KafkaSourcePartitionWithCommit(StatefulSourcePartition[KafkaSourceMessage
     def __init__(
         self,
         step_id: str,
-        config: Dict[str, str],
+        config: dict[str, str],
         topic: str,
         part_idx: int,
         starting_offset: int,
-        resume_state: Optional[int],
+        resume_state: int | None,
         batch_size: int,
         poll_timeout: float,
     ):
@@ -142,7 +143,7 @@ class _KafkaSourcePartitionWithCommit(StatefulSourcePartition[KafkaSourceMessage
             self._offset,
         )
 
-    def next_batch(self) -> List[KafkaSourceMessage]:
+    def next_batch(self) -> list[KafkaSourceMessage]:
         """
         Fetch next batch of messages and commit offsets.
 
@@ -160,7 +161,7 @@ class _KafkaSourcePartitionWithCommit(StatefulSourcePartition[KafkaSourceMessage
         msgs = self._consumer.consume(self._batch_size, timeout=self._poll_timeout)
 
         # Construct KafkaSourceMessage objects
-        batch: List[KafkaSourceMessage] = []
+        batch: list[KafkaSourceMessage] = []
         last_offset = None
 
         for msg in msgs:
@@ -236,7 +237,7 @@ class _KafkaSourcePartitionWithCommit(StatefulSourcePartition[KafkaSourceMessage
 
         return batch
 
-    def snapshot(self) -> Optional[int]:
+    def snapshot(self) -> int | None:
         """
         Return current offset for Bytewax recovery system.
 
@@ -283,7 +284,7 @@ class KafkaSourceWithCommit(FixedPartitionedSource[KafkaSourceMessage, Optional[
         topics: Iterable[str],
         tail: bool = True,
         starting_offset: int = OFFSET_BEGINNING,
-        add_config: Optional[Dict[str, str]] = None,
+        add_config: dict[str, str] | None = None,
         batch_size: int = 1000,
         poll_timeout: float = 0.1,
     ):
@@ -312,7 +313,7 @@ class KafkaSourceWithCommit(FixedPartitionedSource[KafkaSourceMessage, Optional[
         self._batch_size = batch_size
         self._poll_timeout = poll_timeout
 
-    def list_parts(self) -> List[str]:
+    def list_parts(self) -> list[str]:
         """
         List all partitions for configured topics.
 
@@ -328,7 +329,7 @@ class KafkaSourceWithCommit(FixedPartitionedSource[KafkaSourceMessage, Optional[
         return list(_list_parts(client, self._topics))
 
     def build_part(
-        self, step_id: str, for_part: str, resume_state: Optional[int]
+        self, step_id: str, for_part: str, resume_state: int | None
     ) -> _KafkaSourcePartitionWithCommit:
         """
         Build a partition handler for the specified partition.
@@ -344,7 +345,7 @@ class KafkaSourceWithCommit(FixedPartitionedSource[KafkaSourceMessage, Optional[
         idx, topic = for_part.split("-", 1)
         part_idx = int(idx)
 
-        assert topic in self._topics, f"Can't resume from different set of Kafka topics"
+        assert topic in self._topics, "Can't resume from different set of Kafka topics"
 
         config = {
             # We use our own group.id from add_config
