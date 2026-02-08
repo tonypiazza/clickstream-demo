@@ -58,6 +58,7 @@ class BatchMetrics:
         summary_interval_seconds: float = 30.0,
         on_summary: Optional[Callable[[], None]] = None,
         log: Optional[logging.Logger] = None,
+        max_poll_interval_ms: int = 300_000,
     ):
         """
         Initialize the batch metrics processor.
@@ -70,6 +71,8 @@ class BatchMetrics:
             on_summary: Optional callback invoked during periodic summaries
                         (e.g., for consumer lag logging from the caller)
             log: Optional logger override. Defaults to this module's logger.
+            max_poll_interval_ms: Kafka max.poll.interval.ms for proximity
+                                  calculation. Default 300,000 (5 minutes).
         """
         self._event_repo = event_repo
         self._session_state = session_state
@@ -97,6 +100,23 @@ class BatchMetrics:
         self._period_pg_sessions_ms = 0.0
         self._period_total_ms = 0.0
         self._last_summary_time = time.monotonic()
+
+        # Loop timing stats — populated by record_loop_timing()
+        self._cum_poll_ms = 0.0
+        self._cum_commit_ms = 0.0
+        self._cum_loop_count = 0
+        self._cum_fill_sum = 0.0  # sum of fill ratios for averaging
+
+        self._period_poll_ms = 0.0
+        self._period_commit_ms = 0.0
+        self._period_loop_count = 0
+        self._period_fill_ratios: list[float] = []
+
+        # Max poll interval proximity — populated by record_loop_timing()
+        self._max_poll_interval_ms = max_poll_interval_ms
+        self._last_batch_total_ms = 0.0  # set by process_batch()
+        self._period_max_proximity = 0.0  # max proximity seen during period
+        self._cum_max_proximity = 0.0  # max proximity seen lifetime
 
     def process_batch(self, events: list[dict]) -> list[dict]:
         """
@@ -183,12 +203,75 @@ class BatchMetrics:
         self._period_pg_sessions_ms += pg_sessions_ms
         self._period_total_ms += total_ms
 
+        # Store for proximity calculation in record_loop_timing()
+        self._last_batch_total_ms = total_ms
+
         # Check if periodic summary is due
         now = time.monotonic()
         if now - self._last_summary_time >= self._summary_interval:
             self._log_summary(now)
 
         return session_records
+
+    def record_loop_timing(
+        self,
+        poll_ms: float,
+        commit_ms: float,
+        batch_size: int,
+        max_batch_size: int,
+    ) -> None:
+        """
+        Record poll and commit timings from the consumer loop.
+
+        Called by each consumer after commit() to track the full loop cycle
+        (poll → process → commit). These timings are included in periodic
+        summaries alongside the 3-step pipeline timings.
+
+        Also computes max poll interval proximity: the ratio of the total
+        loop time (poll + process + commit) to max.poll.interval.ms. A
+        proximity > 0.7 triggers a WARNING; > 0.9 triggers a CRITICAL log.
+
+        Args:
+            poll_ms: Time spent in consume()/poll() in milliseconds
+            commit_ms: Time spent in commit() in milliseconds
+            batch_size: Number of messages returned by this poll
+            max_batch_size: Maximum messages requested (num_messages / max_records)
+        """
+        fill_ratio = batch_size / max_batch_size if max_batch_size > 0 else 0.0
+
+        self._cum_poll_ms += poll_ms
+        self._cum_commit_ms += commit_ms
+        self._cum_loop_count += 1
+        self._cum_fill_sum += fill_ratio
+
+        self._period_poll_ms += poll_ms
+        self._period_commit_ms += commit_ms
+        self._period_loop_count += 1
+        self._period_fill_ratios.append(fill_ratio)
+
+        # Compute max poll interval proximity
+        if self._max_poll_interval_ms > 0:
+            loop_ms = poll_ms + self._last_batch_total_ms + commit_ms
+            proximity = loop_ms / self._max_poll_interval_ms
+            self._period_max_proximity = max(self._period_max_proximity, proximity)
+            self._cum_max_proximity = max(self._cum_max_proximity, proximity)
+
+            # Threshold warnings
+            if proximity > 0.9:
+                self._log.critical(
+                    "Poll proximity %.2f — consumer may be evicted (loop=%.0fms / max_poll=%dms)",
+                    proximity,
+                    loop_ms,
+                    self._max_poll_interval_ms,
+                )
+            elif proximity > 0.7:
+                self._log.warning(
+                    "Poll proximity %.2f — consumer nearing eviction threshold "
+                    "(loop=%.0fms / max_poll=%dms)",
+                    proximity,
+                    loop_ms,
+                    self._max_poll_interval_ms,
+                )
 
     def _log_summary(self, now: float) -> None:
         """Log periodic throughput summary and reset period counters."""
@@ -219,6 +302,26 @@ class BatchMetrics:
             avg_pg_sessions_ms,
         )
 
+        # Log loop timing stats if available
+        if self._period_loop_count > 0:
+            avg_poll_ms = self._period_poll_ms / self._period_loop_count
+            avg_commit_ms = self._period_commit_ms / self._period_loop_count
+            avg_fill = (
+                sum(self._period_fill_ratios) / len(self._period_fill_ratios)
+                if self._period_fill_ratios
+                else 0.0
+            )
+            self._log.info(
+                "Loop (%.1fs): avg_poll=%.*fms avg_commit=%.*fms | fill=%d%% | poll_proximity=%.2f",
+                elapsed,
+                _precision(avg_poll_ms),
+                avg_poll_ms,
+                _precision(avg_commit_ms),
+                avg_commit_ms,
+                int(avg_fill * 100),
+                self._period_max_proximity,
+            )
+
         # Log cumulative totals
         total_elapsed = now - self._start_time
         overall_eps = self._total_events / total_elapsed if total_elapsed > 0 else 0
@@ -245,6 +348,11 @@ class BatchMetrics:
         self._period_valkey_ms = 0.0
         self._period_pg_sessions_ms = 0.0
         self._period_total_ms = 0.0
+        self._period_poll_ms = 0.0
+        self._period_commit_ms = 0.0
+        self._period_loop_count = 0
+        self._period_fill_ratios = []
+        self._period_max_proximity = 0.0
         self._last_summary_time = now
 
     def log_final_summary(self) -> None:
@@ -283,6 +391,22 @@ class BatchMetrics:
             _precision(avg_pg_sessions_ms),
             avg_pg_sessions_ms,
         )
+
+        # Log final loop timing stats if available
+        if self._cum_loop_count > 0:
+            avg_poll_ms = self._cum_poll_ms / self._cum_loop_count
+            avg_commit_ms = self._cum_commit_ms / self._cum_loop_count
+            avg_fill = self._cum_fill_sum / self._cum_loop_count
+            self._log.info(
+                "Final loop: avg_poll=%.*fms avg_commit=%.*fms | "
+                "fill=%d%% | max_poll_proximity=%.2f",
+                _precision(avg_poll_ms),
+                avg_poll_ms,
+                _precision(avg_commit_ms),
+                avg_commit_ms,
+                int(avg_fill * 100),
+                self._cum_max_proximity,
+            )
 
 
 def _precision(ms: float) -> int:

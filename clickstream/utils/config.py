@@ -261,6 +261,10 @@ class ConsumerSettings(BaseSettings):
         default=False,
         description="Exit when all partitions reach EOF (for benchmarking)",
     )
+    max_poll_interval_ms: int = Field(
+        default=300_000,
+        description="Kafka max.poll.interval.ms for eviction proximity tracking",
+    )
 
 
 class Settings(BaseSettings):

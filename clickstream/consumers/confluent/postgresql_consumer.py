@@ -224,6 +224,7 @@ def run() -> None:
         session_repo,
         on_summary=_log_consumer_lag,
         log=logger,
+        max_poll_interval_ms=consumer_settings.max_poll_interval_ms,
     )
 
     # Track EOF partitions for benchmark mode
@@ -371,6 +372,14 @@ def run() -> None:
                 consumer.commit()
                 commit_ms = (time.monotonic() - t_commit) * 1000
                 logger.info("Commit: %.0fms", commit_ms)
+
+                # Record loop timing for periodic summaries
+                batch_metrics.record_loop_timing(
+                    poll_ms=poll_ms,
+                    commit_ms=commit_ms,
+                    batch_size=len(messages),
+                    max_batch_size=10000,
+                )
 
             except Exception as e:
                 logger.error("Error processing batch: %s", e)
